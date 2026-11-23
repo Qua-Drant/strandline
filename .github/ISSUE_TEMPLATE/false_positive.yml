@@ -1,0 +1,54 @@
+name: Cleaning rule false positive
+description: Something was suggested for cleaning (or classified) that should not be
+labels: [false-positive, data-safety]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Use this when Strandline marks something as **可重建 / rebuildable**, suggests recycling it, or puts it in the wrong group, and it should be kept.
+        If files were actually lost or damaged, please report privately instead (Security → Report a vulnerability).
+  - type: input
+    id: item
+    attributes:
+      label: Block or suggestion name
+      placeholder: e.g. "浏览器缓存", "旧项目构建产物 ×3"
+    validations:
+      required: true
+  - type: input
+    id: path
+    attributes:
+      label: Path shown in the app
+      description: You may replace your user name, e.g. %USERPROFILE%\AppData\Local\...
+    validations:
+      required: true
+  - type: dropdown
+    id: level
+    attributes:
+      label: How it was labelled
+      options:
+        - 可重建 (L1, rebuildable)
+        - 需审阅 (L2, needs review)
+        - 不可恢复 (L3, irreversible)
+        - Large file / duplicate
+        - Rule match
+    validations:
+      required: true
+  - type: textarea
+    id: why
+    attributes:
+      label: Why it should be kept
+      description: Which app owns it, what breaks if it is removed, how to recognise it.
+    validations:
+      required: true
+  - type: dropdown
+    id: acted
+    attributes:
+      label: Did you clean it?
+      options:
+        - No, I noticed before cleaning
+        - Yes, and undo restored it
+        - Yes, and undo did not restore it
+  - type: input
+    id: version
+    attributes:
+      label: Strandline version and Windows version

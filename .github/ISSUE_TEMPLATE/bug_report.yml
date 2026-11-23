@@ -1,0 +1,52 @@
+name: Bug report
+description: Something does not work as expected
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for reporting! **If the bug could delete, damage or move your files unexpectedly, or bypass the protected-path guard, please report it privately instead** (Security → Report a vulnerability). See SECURITY.md.
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened
+      description: What you did, what you expected, and what happened instead.
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce
+      description: Ideally inside a sandbox (`npm run sandbox`).
+      placeholder: |
+        1. Open the space map
+        2. ...
+  - type: dropdown
+    id: mode
+    attributes:
+      label: Where
+      options:
+        - Desktop app
+        - Browser demo
+    validations:
+      required: true
+  - type: dropdown
+    id: readonly
+    attributes:
+      label: Read-only mode
+      options:
+        - On
+        - Off
+        - Not sure
+  - type: input
+    id: version
+    attributes:
+      label: Strandline version and Windows version
+      placeholder: Strandline 0.1.0, Windows 11 24H2
+    validations:
+      required: true
+  - type: textarea
+    id: logs
+    attributes:
+      label: Screenshots or logs
+      description: Activity page entries or error toasts help. Replace your user name in paths if you like.

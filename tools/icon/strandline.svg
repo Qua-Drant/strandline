@@ -1,0 +1,29 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024" width="1024" height="1024">
+  <!-- Strandline app icon: tide over sand, three pebbles left on the strand line -->
+  <defs>
+    <clipPath id="tile"><rect x="64" y="64" width="896" height="896" rx="208" ry="208"/></clipPath>
+    <linearGradient id="sea" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#4C8587"/>
+      <stop offset="1" stop-color="#3C7375"/>
+    </linearGradient>
+  </defs>
+  <g clip-path="url(#tile)">
+    <!-- sand -->
+    <rect x="64" y="64" width="896" height="896" fill="#F1ECE1"/>
+    <!-- sea, with a soft wave edge -->
+    <path d="M64 64 H960 V452 C 860 500 760 418 650 450 C 540 482 470 548 350 516 C 250 490 160 450 64 486 Z" fill="url(#sea)"/>
+    <!-- foam line where the wave stops: the strand line -->
+    <path d="M64 540 C 170 500 262 548 360 572 C 480 602 556 528 664 502 C 772 476 866 548 960 512"
+          fill="none" stroke="#FAF8F3" stroke-width="30" stroke-linecap="round" opacity="0.9"/>
+    <!-- a second, fainter tide mark -->
+    <path d="M64 300 C 190 262 300 330 430 300 C 560 270 650 236 780 270 C 860 290 910 300 960 286"
+          fill="none" stroke="#FAF8F3" stroke-width="18" stroke-linecap="round" opacity="0.28"/>
+    <!-- pebbles -->
+    <ellipse cx="402" cy="748" rx="150" ry="94" fill="#2B3138" transform="rotate(-6 402 748)"/>
+    <ellipse cx="640" cy="772" rx="108" ry="70" fill="#6E767E" transform="rotate(5 640 772)"/>
+    <ellipse cx="760" cy="676" rx="54" ry="38" fill="#C23B2B" transform="rotate(-10 760 676)"/>
+    <!-- highlights so the pebbles read as stones -->
+    <ellipse cx="360" cy="716" rx="46" ry="18" fill="#FFFFFF" opacity="0.14" transform="rotate(-12 360 716)"/>
+    <ellipse cx="612" cy="748" rx="32" ry="12" fill="#FFFFFF" opacity="0.16" transform="rotate(-4 612 748)"/>
+  </g>
+</svg>

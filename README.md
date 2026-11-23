@@ -1,49 +1,75 @@
-# Strandline · 拾滩
+<p align="center"><img src="tools/icon/strandline.png" width="112" alt="Strandline icon"></p>
 
-安全优先的 Windows 磁盘整理工具：空间地图、清理建议、大文件、重复文件、整理规则与目录迁移。
-Tauri v2（Rust 后端）+ React 19 / Vite 前端。
+<h1 align="center">Strandline · 拾滩</h1>
 
-- **桌面版**：真实扫描与操作本机磁盘。
-- **在线演示**：同一套界面跑在浏览器里，使用内置的演示数据，不接触任何真实文件（可部署到 GitHub Pages）。
+<p align="center">
+  A safety-first disk organizer for Windows — space map, cleaning suggestions, large files, duplicates, rules and verified folder migration.<br>
+  <b>English</b> · <a href="README.zh-CN.md">简体中文</a>
+</p>
 
-## 安全设计
+<p align="center">
+  <a href="https://OWNER.github.io/strandline/">Live demo (mock data)</a> ·
+  <a href="https://github.com/OWNER/strandline/releases">Download</a> ·
+  <a href="SECURITY.md">Security model</a>
+</p>
 
-| 原则 | 做法 |
+<!-- Screenshots / GIF: put files in docs/screenshots/ and link them here.
+<p align="center"><img src="docs/screenshots/map.png" width="860" alt="Space map"></p>
+-->
+
+Strandline is a desktop app (Tauri v2: Rust backend + React 19 / Vite frontend). The same interface also runs in a browser as a **demo with built-in mock data** that never touches a real file.
+
+## Why it is safe to point at your system drive
+
+| Principle | What the code does |
 | --- | --- |
-| 默认只进回收站 | 所有清理、规则、重复文件、大文件都移入回收站，30 天内可撤销。唯一的不可逆操作是「清空回收站」，界面上需单独确认。 |
-| 不让 Windows 静默永久删除 | 移入回收站前检查该卷回收站的最大容量和「直接删除」设置；放不下的项目直接拒绝并说明原因，而不是交给系统去永久删除。 |
-| 硬编码保护路径 | `src-tauri/src/guard.rs`：Windows、Program Files、ProgramData\Microsoft、引导与恢复目录、页面/休眠文件、注册表配置单元、用户与系统根文件夹本身等一律拒绝写入；会解析链接后再检查一次。任何设置或规则都不能放宽。 |
-| 只读扫描 | 只读取文件夹结构、名称、大小和时间；不跟随符号链接与目录联接；没有权限的文件夹直接跳过。 |
-| 可验证、可续传的迁移 | 目标盘空间检查 → 分块复制并对每个文件做 BLAKE3 校验、落盘后读回比对 → 断点日志（中断后续传）→ 原文件夹改名备份并在原处建立目录联接（不可达则回滚）→ 备份移入回收站（放不下就保留在磁盘上并告知）。相关程序在运行、或文件夹被占用时自动暂停，可重试，可撤销。 |
-| 不在真实系统盘上测试 | `sandbox-gen` 生成模拟的磁盘目录树；所有测试只在 `sandbox/.tests` 里运行。设置里的「扫描范围」只接受沙盒文件夹或整盘。 |
+| **Read-only until you say otherwise** | First launch starts in read-only mode: scanning works, every write (clean, recycle, migrate, rules) is refused by the backend. Switch it off in *Settings › 清理与安全*. |
+| **Recycle Bin, not delete** | Cleaning, rules, duplicates and large files all go to the Recycle Bin and can be undone for 30 days. The only irreversible action is *Empty Recycle Bin*, which asks again. |
+| **No silent permanent deletes** | Before recycling, the volume's Recycle Bin size limit and "delete immediately" setting are checked. Anything Windows would destroy instead of recycling is refused and explained. |
+| **Hard-coded protected paths** | `src-tauri/src/guard.rs` refuses Windows, Program Files, ProgramData\Microsoft, boot/recovery folders, page/hibernation files, registry hives and the root folders themselves — checked again after resolving links. No setting or rule can widen it. |
+| **Read-only, accurate scanning** | Only names, sizes and times are read. Symbolic links, junctions and mount points are never followed (no loops, nothing counted twice); hard links count once; folders without permission are skipped and counted. |
+| **Cloud files stay in the cloud** | OneDrive / iCloud online-only placeholders (`OFFLINE`, `RECALL_ON_OPEN`, `RECALL_ON_DATA_ACCESS`) are never opened: not counted, not hashed, not migrated, skipped by rules. |
+| **Verified, resumable migration** | Space check → chunked copy with a BLAKE3 hash of every file, fsync and read-back compare → journal for resume → original renamed to a backup and replaced by a directory junction (rolled back if unreachable) → backup to the Recycle Bin. Pauses while the owning app runs or a folder is held open. |
+| **Never tested on a real system drive** | `sandbox-gen` builds a fake drive tree; every test runs inside `sandbox/.tests`. The scan target in Settings accepts only a sandbox folder or a whole drive. |
 
-## 开发
+Details: [SECURITY.md](SECURITY.md).
 
-需要：Node 22+、Rust（stable-msvc）、Visual Studio C++ 生成工具、WebView2 运行时。
+## Features
+
+- **Space map** — a treemap of the drive with free space as a true-proportion band; blocks are grouped by what they are (system, dev tools, AI models, caches, user folders…) and coloured by how safe they are to clean.
+- **Cleaning suggestions** — rebuildable caches (pip, npm, conda, browsers, temp, crash dumps…), old installers and stale build output, with what each one does and its PowerShell equivalent.
+- **Large files** — weighed by size and how long they have been untouched; files owned by apps or Windows are explained instead of deleted.
+- **Duplicates** — size → first/last 64 KiB → full BLAKE3, so only byte-identical files are offered.
+- **Rules** — "installers older than 30 days to the Recycle Bin", "screenshots into a folder per month"… with a dry-run preview and undo.
+- **Migration** — move WeChat files, Docker / WSL disks, Ollama models or any big folder to another drive, keeping the old path working.
+- **Activity** — 90 days of history with undo, and a calendar of free space.
+- Several drives (C:, D:, E:…), light and dark themes, Ctrl K command palette.
+
+## Development
+
+Requirements: Node 22+, Rust (stable-msvc), Visual Studio C++ build tools, WebView2 runtime.
 
 ```powershell
 npm install
-npm run dev        # 浏览器演示模式（Mock 数据）：http://localhost:5173
-npm run desktop    # 桌面版（真实后端），等同 tauri dev
+npm run dev        # browser demo with mock data: http://localhost:5173
+npm run desktop    # desktop app with the real backend (tauri dev)
 ```
 
-### 用沙盒安全地试真实功能
+### Try the real features safely
 
 ```powershell
-npm run sandbox    # 在 sandbox\demo 生成模拟磁盘（大文件为稀疏文件，几乎不占空间）
+npm run sandbox    # fake drive tree in sandbox\demo (big files are sparse: almost no disk space)
 ```
 
-然后在桌面版的 **设置 › 扫描 › 扫描范围** 里填 `sandbox\demo` 的完整路径。之后的扫描、清理、撤销、迁移、规则都只发生在这个文件夹里（迁移目标默认是 `sandbox\demo\_moved`）。
-
-开发时也可以把应用数据放到别处，避免碰到 `%APPDATA%\Strandline`：
+In the desktop app set **Settings › 扫描 › 扫描范围** to the full path of `sandbox\demo` and turn read-only mode off. Scans, cleaning, undo, migration and rules then only happen inside that folder (migrations go to `sandbox\demo\_moved`). Keep the app's data away from `%APPDATA%` while developing:
 
 ```powershell
 $env:STRANDLINE_DATA_DIR = "$PWD\sandbox\appdata"; npm run desktop
 ```
 
-### 端到端检查
+### End-to-end checks
 
-`tools/e2e/cdp.mjs` 通过 WebView2 远程调试驱动真实的桌面窗口：
+`tools/e2e/cdp.mjs` drives the real desktop window over WebView2 remote debugging:
 
 ```powershell
 $env:WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS = "--remote-debugging-port=9222"; npm run desktop
@@ -51,53 +77,51 @@ node tools/e2e/cdp.mjs eval "location.hash = '#/map'"
 node tools/e2e/cdp.mjs shot map.png
 ```
 
-## 测试与检查
+## Tests and checks
 
 ```powershell
-npm run lint           # 前端 oxlint
-npm run build          # TypeScript 类型检查 + 打包演示版
-npm run lint:backend   # cargo clippy（警告即失败）
-npm run test:backend   # Rust 单元测试 + 集成测试（只在沙盒里）
+npm run lint           # frontend (oxlint)
+npm run build          # type check + demo build
+npm run lint:backend   # cargo clippy, warnings are errors
+npm run test:backend   # Rust unit + integration tests, sandbox only
+cargo test --release --manifest-path src-tauri/Cargo.toml --test perf -- --ignored --nocapture   # 300k-file scan benchmark
 ```
 
-后端测试覆盖：沙盒生成、只读扫描与取消、分类与容器去重、大文件识别、重复文件（同大小不同内容不会误判）、回收站移入与恢复、清空回收站在沙盒中被拒绝、迁移校验与目录联接、迁移中断后续传、应用运行时暂停、迁移撤销、规则预演/执行/撤销、保护路径拦截。
+Covered by tests: sandbox generation; scanning and cancel; junction loops, hard links, cloud placeholders, unreadable folders; classification without double counting; large files; duplicates (same size, different content is not a duplicate); Recycle Bin recycle and restore; emptying the bin refused in a sandbox; migration verify + junction, resume after interruption, pause while the app runs, undo; rule dry run / run / undo; protected paths.
 
-## 构建
+## Build and release
 
 ```powershell
-npm run desktop:build  # 生成 NSIS / MSI 安装包（src-tauri\target\release\bundle）
-npm run build          # 只构建浏览器演示版（dist\，相对路径，可直接放到 GitHub Pages）
+npm run desktop:build  # NSIS installer, MSI and the portable exe under src-tauri\target\release
+npm run build          # browser demo only (dist\, relative paths, ready for GitHub Pages)
 ```
 
-`.github/workflows/ci.yml` 会在 Windows 上跑全部检查，并把演示版发布到 GitHub Pages。
+- `.github/workflows/ci.yml` — lint, build, clippy and tests on Windows for every push and PR; deploys the demo to GitHub Pages from `main`.
+- `.github/workflows/release.yml` — on a `v*` tag: full checks, NSIS installer, portable `strandline.exe`, `SHA256SUMS.txt`, and a **draft** GitHub Release.
 
-## 目录结构
+The app icon is `tools/icon/strandline.svg` (render with `node tools/icon/render.mjs`, then `npx tauri icon tools/icon/strandline.png -o src-tauri/icons`).
+
+## Project layout
 
 ```
-src/                     React 前端
-  pages/                 8 个页面（概览、空间地图、清理建议、大文件、重复文件、整理规则、活动、设置）
-  shell/                 标题栏、侧栏、命令面板、通知、共享状态
-  services/
-    diskService.ts       统一的数据与操作接口，启动时自动选择实现
-    mock/                MockDiskService：设计稿的演示数据与模拟交互
-    tauri/               TauriDiskService：调用 Rust 后端
-  styles/strandline.css  设计稿样式（原样保留）
+src/                     React frontend
+  pages/                 overview, space map, suggestions, large files, duplicates, rules, activity, settings
+  shell/                 title bar, sidebar, command palette, toasts, shared state
+  services/diskService.ts  one interface for every page; MockDiskService (demo) or TauriDiskService (desktop)
+  styles/strandline.css  the design's stylesheet
 src-tauri/src/
-  guard.rs               写入守卫（保护路径）
-  scan.rs                并行只读扫描
-  catalog.rs             分类：地图区块、清理建议、迁移计划
-  finder.rs              大文件与重复文件
-  recycle.rs             回收站（容量预检、恢复）
-  migrate.rs             校验 + 续传 + 目录联接的迁移
-  rules.rs               整理规则
-  store.rs               设置、规则、活动、历史的本地 JSON 存储
-  sandbox.rs             沙盒生成器（bin/sandbox_gen.rs）
-  commands.rs / actions.rs  Tauri 命令
-tools/e2e/cdp.mjs        桌面窗口端到端脚本
+  guard.rs  scan.rs  winfs.rs  catalog.rs  finder.rs  recycle.rs  migrate.rs  rules.rs  store.rs  sandbox.rs
+  commands.rs  actions.rs  Tauri commands
+src-tauri/tests/         sandbox integration tests, Windows edge cases, benchmark
+tools/                   e2e driver, icon
 ```
 
-数据保存在 `%APPDATA%\Strandline\strandline.json`（设置、自定义规则、90 天活动记录、每日可用空间、撤销信息）。
+Settings, custom rules, 90 days of activity, daily free space and undo records live in `%APPDATA%\Strandline\strandline.json`.
 
-## 许可证
+## Contributing
 
-MIT
+Issues and pull requests are welcome — please read [SECURITY.md](SECURITY.md) first. A cleaning suggestion that looks wrong (something important marked as safe to clean) is treated as a security bug: use the *Cleaning rule false positive* issue template.
+
+## License
+
+[MIT](LICENSE)
