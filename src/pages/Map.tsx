@@ -40,7 +40,9 @@ interface MapState {
   /** free space when the page opened, for the "清理前" mark on the free band */
   free0: number | null;
   phase: Phase; p: number; checked: Flags | null; undone: Flags; ignored: Flags;
-  run: Run | null; receiptId: string | null; queue: string[]; qi: number; step: number; ebb: Ebb; ebbIds: Flags; tc: number | null;
+  run: Run | null; receiptId: string | null; queue: string[];
+  /** name / action / level of each queued block, kept after the block leaves the model (real cleaning removes it) */
+  qmeta: Record<string, { name: string; act: MapAct; level: MapLevel }>; qi: number; step: number; ebb: Ebb; ebbIds: Flags; tc: number | null;
   moving: string | null; movingTo: string; mp: number; paused: boolean;
   toEdits: Record<string, string>; verify: Flags; linkOff: Flags;
   overlay: Overlay; menu: { id: string; x: number; y: number; W: number; H: number } | null; detail: string | null; dOpen: boolean; moveId: string | null;
@@ -55,7 +57,7 @@ interface MapState {
 const INIT: MapState = {
   model: null, free0: null,
   phase: 'results', p: 100, checked: null, undone: {}, ignored: {},
-  run: null, receiptId: null, queue: [], qi: 0, step: 0, ebb: null, ebbIds: {}, tc: null, moving: null, movingTo: 'D', mp: 0, paused: false,
+  run: null, receiptId: null, queue: [], qmeta: {}, qi: 0, step: 0, ebb: null, ebbIds: {}, tc: null, moving: null, movingTo: 'D', mp: 0, paused: false,
   toEdits: {}, verify: {}, linkOff: {}, overlay: null, menu: null, detail: null, dOpen: false, moveId: null, editing: false, draft: '',
   mode: 'all', open: null, hover: null, pinned: null, focusCat: null, drag: null, confirm: false, lw: 320, mapW: NW, mapH: NH,
   rem: { low: true, weekly: false, inst: true }, frozen: null, seen: {},
@@ -176,7 +178,8 @@ export function MapPage() {
     const ids = Object.keys(checked).filter((id) => checked[id] && selectable(id)).sort((a, b) => RUN_ORDER.indexOf(LEAF[a].act) - RUN_ORDER.indexOf(LEAF[b].act));
     const ebbIds: Flags = Object.fromEntries(ids.map((id) => [id, true]));
     const job = diskService.clean(sys.id, ids);
-    set({ frozen: { items: items(), free: freeNow }, phase: 'cleaning', queue: ids, qi: 0, step: 0, confirm: false, run: { ids: [], amt: {}, freed: 0, bin: 0 }, receiptId: null, undone: {}, overlay: null, dOpen: false, hover: null, pinned: null, ebb: 'lift', ebbIds });
+    const qmeta = Object.fromEntries(ids.map((id) => [id, { name: LEAF[id].name, act: LEAF[id].act, level: LEAF[id].level }]));
+    set({ qmeta, frozen: { items: items(), free: freeNow }, phase: 'cleaning', queue: ids, qi: 0, step: 0, confirm: false, run: { ids: [], amt: {}, freed: 0, bin: 0 }, receiptId: null, undone: {}, overlay: null, dOpen: false, hover: null, pinned: null, ebb: 'lift', ebbIds });
     void st;
     const at = (ms: number, f: () => void) => { ebbT.current.push(window.setTimeout(f, ms)); };
     at(150, () => { set({ ebb: 'wave' }); sound.wash(false, 460); });
@@ -200,7 +203,7 @@ export function MapPage() {
     if (!st.receiptId || !st.run) return;
     try {
       await diskService.undo(st.receiptId, id);
-      const amt = st.run.amt[id], act = LEAF[id]?.act;
+      const amt = st.run.amt[id], act = st.qmeta[id]?.act ?? LEAF[id]?.act;
       const run = { ...st.run, ...(act === 'recycle' ? { bin: st.run.bin - amt } : { freed: st.run.freed - amt }) };
       set({ undone: { ...st.undone, [id]: true }, run });
       await reloadModel(); await refreshDrives();
@@ -214,10 +217,10 @@ export function MapPage() {
       set({ moving: pr.moveId, movingTo: pr.drive, mp: pr.pct, paused: true });
       pushToast({ kind: 'err', title: pr.message ?? '迁移已暂停', sub: '处理好之后点重试，已复制并校验过的部分会保留', action: '重试', run: () => { set({ paused: false }); void diskService.resumeMigration(pr.moveId); } });
     } else if (pr.state === 'done') {
-      const name = moveOf(pr.moveId)?.name ?? '';
-      set((p) => { const ck = { ...(p.checked ?? {}) }; (moveOf(pr.moveId)?.cells ?? []).forEach((c) => { delete ck[c]; }); return { moving: null, mp: 0, paused: false, checked: ck }; });
+      const cur = sref.current.model, name = cur?.moves.find((m) => m.id === pr.moveId)?.name ?? '';
+      set((p) => { const ck = { ...(p.checked ?? {}) }; (cur?.moves.find((m) => m.id === pr.moveId)?.cells ?? []).forEach((c) => { delete ck[c]; }); return { moving: null, mp: 0, paused: false, checked: ck }; });
       void reloadModel(); void refreshDrives();
-      pushToast({ kind: 'ok', title: name + '已迁移至 ' + pr.drive + ':', sub: sys.id + ': 多出 ' + pr.gb.toFixed(1) + ' GB', action: '打开新位置', run: () => { const m = moveOf(pr.moveId); if (m) void diskService.openPath(target(m)); } }, 6000);
+      pushToast({ kind: 'ok', title: name + '已迁移至 ' + pr.drive + ':', sub: (cur?.drive.id ?? sys.id) + ': 多出 ' + pr.gb.toFixed(1) + ' GB' + (pr.message ? ' · ' + pr.message : ''), action: '打开新位置', run: () => { const m = cur?.moves.find((x) => x.id === pr.moveId); if (m) void diskService.openPath(sref.current.toEdits[m.id] || m.to); } }, 6000);
     } else {
       set({ moving: null, mp: 0, paused: false });
       pushToast({ kind: 'err', title: '迁移没有完成', sub: pr.message ?? '源文件夹保持原样，没有删除任何文件' }, 10000);
@@ -463,6 +466,7 @@ export function MapPage() {
     return { a, sw: 'sw-' + (a === 'rebuild' ? 'L1' : a === 'empty' ? 'L3' : 'L2'), label: ALABEL[a], names: ids.map((id) => LEAF[id].name).join('、'), sum: ids.reduce((x, id) => x + gain(id), 0).toFixed(1) + ' GB', n: ids.length };
   }).filter((g) => g.n > 0);
   const run = s.run || { ids: [], amt: {}, freed: 0, bin: 0 };
+  const binOnly = run.freed < 0.05 && run.bin > 0.05;
 
   // ---- 30-day tide meter: smooth area curve, 87G reference, scrubbable cursor
   const used = TOTAL - freeNow, used30 = TOTAL - FREE30;
@@ -775,8 +779,8 @@ export function MapPage() {
                 return (
                   <li key={id} className="stp" style={{ borderBlockStart: '1px solid var(--line)' }}>
                     {done ? <span className="dot-done"><Icon name="check" size={10} /></span> : active ? <span className="spin" aria-label="进行中" /> : <span className="dot-wait" />}
-                    <span style={{ display: 'grid', minInlineSize: 0 }}><span className="ellipsis">{LEAF[id].name}</span><span className="muted ellipsis" style={{ fontSize: '0.6875rem' }}>{active ? ['正在确认相关程序没有运行…', '正在执行…', '正在重新测量…'][s.step] : done ? ALABEL[LEAF[id].act] : ''}</span></span>
-                    <span className="mono muted" style={{ fontSize: '0.75rem' }}>{(done && s.run ? s.run.amt[id] : gain(id)).toFixed(1)}</span>
+                    <span style={{ display: 'grid', minInlineSize: 0 }}><span className="ellipsis">{s.qmeta[id]?.name}</span><span className="muted ellipsis" style={{ fontSize: '0.6875rem' }}>{active ? ['正在确认相关程序没有运行…', '正在执行…', '正在重新测量…'][s.step] : done ? ALABEL[s.qmeta[id]?.act ?? 'keep'] : ''}</span></span>
+                    <span className="mono muted" style={{ fontSize: '0.75rem' }}>{(done && s.run ? s.run.amt[id] ?? 0 : gain(id)).toFixed(1)}</span>
                   </li>
                 );
               })}
@@ -789,18 +793,18 @@ export function MapPage() {
               <section className="sbs" aria-label="清理收据" style={{ display: 'grid', alignContent: 'start', minBlockSize: 0, overflowY: 'auto' }}>
                 <div className="muted" style={{ fontSize: '0.75rem' }}>清理完成 · {hhmm()} 重新测量</div>
                 <dl style={{ margin: '0.5rem 0 0.75rem' }}>
-                  <div className="rc-row"><dt>已释放磁盘空间</dt><dd className="mono" style={{ fontSize: '1.25rem', fontWeight: 500, color: 'var(--tide)' }}>{run.freed.toFixed(1)} GB</dd></div>
+                  <div className="rc-row"><dt>{binOnly ? '已移入回收站' : '已释放磁盘空间'}</dt><dd className="mono" style={{ fontSize: '1.25rem', fontWeight: 500, color: 'var(--tide)' }}>{(binOnly ? run.bin : run.freed).toFixed(1)} GB</dd></div>
                   {run.freed >= 0.5 && <p className="rc-human">{(() => { const f = run.freed, n7 = Math.floor(f / 4.4), days = Math.round(f / (43.2 / 30)); return (n7 >= 1 ? '够再装 ' + n7 + ' 个 7B 本地模型（每个约 4.4 GB），' : '') + '约抵消 C: 过去 ' + days + ' 天的空间增长'; })()}</p>}
-                  {run.bin > 0.05 && <div className="rc-row"><dt>已移入回收站<span className="muted" style={{ fontSize: '0.75rem' }}>（清空后释放）</span></dt><dd className="mono">{run.bin.toFixed(1)} GB</dd></div>}
+                  {run.bin > 0.05 && !binOnly && <div className="rc-row"><dt>已移入回收站<span className="muted" style={{ fontSize: '0.75rem' }}>（清空后释放）</span></dt><dd className="mono">{run.bin.toFixed(1)} GB</dd></div>}
                 </dl>
                 {run.ids.map((id) => {
-                  const a = LEAF[id].act, und = !!s.undone[id];
+                  const a = s.qmeta[id]?.act ?? 'recycle', und = !!s.undone[id];
                   return (
                     <div key={id} className="rc-item">
-                      <span className={'sw10 sw-' + LEAF[id].level} />
-                      <span style={{ display: 'grid', minInlineSize: 0 }}><span className="ellipsis">{LEAF[id].name}</span><span className="muted ellipsis" style={{ fontSize: '0.6875rem' }}>{und ? '已' + (a === 'setting' ? '还原' : '撤销') : ALABEL[a] + (id === 'temp' ? ' · 跳过 3 个正在使用的文件' : '')}</span></span>
+                      <span className={'sw10 sw-' + (s.qmeta[id]?.level ?? 'L4')} />
+                      <span style={{ display: 'grid', minInlineSize: 0 }}><span className="ellipsis">{s.qmeta[id]?.name}</span><span className="muted ellipsis" style={{ fontSize: '0.6875rem' }}>{und ? '已' + (a === 'setting' ? '还原' : '撤销') : ALABEL[a] + (id === 'temp' && diskService.mode === 'mock' ? ' · 跳过 3 个正在使用的文件' : '')}</span></span>
                       <span style={{ display: 'inline-flex', alignItems: 'baseline', gap: '0.625rem' }}>
-                        <span className="mono" style={{ fontSize: '0.75rem' }}>{und ? '—' : run.amt[id].toFixed(1)}</span>
+                        <span className="mono" style={{ fontSize: '0.75rem' }}>{und ? '—' : (run.amt[id] ?? 0).toFixed(1)}</span>
                         {(a === 'recycle' || a === 'setting') && !und && <button type="button" className="link-btn" style={{ fontSize: '0.75rem' }} onClick={() => void undo(id)}>{a === 'setting' ? '还原' : '撤销'}</button>}
                       </span>
                     </div>
@@ -957,7 +961,7 @@ export function MapPage() {
             </div>
             {mv.err && <p style={{ margin: '-0.25rem 0 0', fontSize: '0.75rem', color: 'var(--accent)' }}>{mv.err}</p>}
             <div className="stat3">
-              <div><div className="mono" style={{ fontSize: '1.125rem' }}>{mv.gbText}</div><div className="muted" style={{ fontSize: '0.6875rem' }}>C: 多出 GB</div></div>
+              <div><div className="mono" style={{ fontSize: '1.125rem' }}>{mv.gbText}</div><div className="muted" style={{ fontSize: '0.6875rem' }}>{model.drive.id}: 多出 GB</div></div>
               <div><div className="mono" style={{ fontSize: '1.125rem' }}>{mv.after}</div><div className="muted" style={{ fontSize: '0.6875rem' }}>{mv.drive} 剩余 GB</div></div>
               <div><div style={{ fontSize: '1.125rem' }}>{mv.m.mins}</div><div className="muted" style={{ fontSize: '0.6875rem' }}>后台进行</div></div>
             </div>

@@ -41,7 +41,7 @@ fn ftype(p: &Path) -> &'static str {
 /// Large files (≥ 1 GiB). Returns the rows plus id → path for later actions.
 pub fn large(files: &[FileRec], roots: &Roots) -> (Vec<BigFile>, HashMap<String, PathBuf>) {
     let mut v: Vec<&FileRec> = files.iter().filter(|f| f.size >= LARGE_MIN).collect();
-    v.sort_by(|a, b| b.size.cmp(&a.size));
+    v.sort_by_key(|f| std::cmp::Reverse(f.size));
     let mut ids = HashMap::new();
     let rows = v.into_iter().enumerate().map(|(i, f)| {
         let id = format!("f{i}");

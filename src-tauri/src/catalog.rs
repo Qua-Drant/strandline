@@ -74,6 +74,7 @@ const CATS: &[(&str, &str, &str, &str)] = &[
     ("other", "其他", "其他", "其他"),
 ];
 
+#[allow(clippy::too_many_arguments)] // a table row: every field is needed
 fn spec(id: &'static str, cat: &'static str, name: &str, short: &str, level: &'static str, act: &'static str, paths: Vec<PathBuf>, how: How, note: &'static str) -> Spec {
     Spec { id, cat, name: name.into(), short: short.into(), xs: String::new(), level, act, paths, how, note, cmd: String::new(), meta: false, mv: "", foam: false }
 }
@@ -160,7 +161,7 @@ fn specs(r: &Roots, scan: &ScanResult) -> Vec<Spec> {
         .map(|e| { let p = e.path(); let sz = scan.size_of(&p); (p, sz) })
         .filter(|(_, sz)| *sz as f64 / GB >= 0.2)
         .collect();
-    extra.sort_by(|a, b| b.1.cmp(&a.1));
+    extra.sort_by_key(|e| std::cmp::Reverse(e.1));
     const IDS: [&str; 4] = ["user1", "user2", "user3", "user4"];
     const MVS: [&str; 4] = ["g_user1", "g_user2", "g_user3", "g_user4"];
     for (i, (p, _)) in extra.into_iter().take(4).enumerate() {
@@ -353,7 +354,7 @@ mod tests {
         let roots = Roots::for_sandbox(&root);
         let res = scan::scan(&root, &roots, &[], &AtomicBool::new(false), |_| {}).unwrap();
         let d = DriveInfo { id: "D".into(), name: "数据盘".into(), total: 100.0, free: 50.0, free30: 50.0 };
-        let b = build(&res, &d, &[d.clone()], &HashSet::new(), vec![], "12:00".into());
+        let b = build(&res, &d, std::slice::from_ref(&d), &HashSet::new(), vec![], "12:00".into());
         let leaf = |id: &str| b.model.leaves.iter().find(|l| l.id == id).unwrap_or_else(|| panic!("leaf {id}"));
         let mb = |x: f64| (x * 1024.0).round();
         assert_eq!(mb(leaf("pip").gb), 360.0);

@@ -110,6 +110,8 @@ export interface Rule {
   last: string;
   /** dry-run preview: [file name, GB] */
   files: [string, number][];
+  /** ms epoch of the last run (desktop scheduler) */
+  lastRun?: number;
 }
 export interface RuleTemplate { name: string; when: [string, string][]; do: string; lv: string; sched: Sched }
 export interface RuleRun { n: number; gb: number; files: [string, number][] }

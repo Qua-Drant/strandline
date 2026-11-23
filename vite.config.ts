@@ -11,7 +11,7 @@ export default defineConfig({
     port: 5173,
     strictPort: true,
     // the Rust side rebuilds itself; don't watch its build output
-    watch: { ignored: ['**/src-tauri/**'] },
+    watch: { ignored: ['**/src-tauri/**', '**/sandbox/**'] },
   },
   envPrefix: ['VITE_', 'TAURI_ENV_*'],
 })

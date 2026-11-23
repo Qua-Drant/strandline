@@ -17,6 +17,9 @@ use tauri::{AppHandle, Emitter, Manager, State};
 
 pub type CmdResult<T> = Result<T, String>;
 
+/// Duplicate groups plus group id → the identical files.
+pub type Dupes = (Vec<DupGroup>, HashMap<String, Vec<PathBuf>>);
+
 /// The last scan and everything derived from it.
 pub struct Scanned {
     pub result: ScanResult,
@@ -25,7 +28,7 @@ pub struct Scanned {
     pub drive: String,
     pub scan_root: String,
     pub large_ids: HashMap<String, PathBuf>,
-    pub dupes: Option<(Vec<DupGroup>, HashMap<String, Vec<PathBuf>>)>,
+    pub dupes: Option<Dupes>,
 }
 
 pub fn lock<T>(m: &std::sync::Mutex<T>) -> std::sync::MutexGuard<'_, T> {
@@ -351,27 +354,3 @@ pub fn open_path(path: String) -> CmdResult<()> {
     Ok(())
 }
 
-// ---------------- pending: implemented in phase 3 (writes)
-
-const PENDING: &str = "这个功能还在开发中";
-
-#[tauri::command]
-pub fn clean_items(_drive: String, _ids: Vec<String>) -> CmdResult<Receipt> { Err(PENDING.into()) }
-#[tauri::command]
-pub fn undo_item(_receipt_id: String, _item_id: String) -> CmdResult<()> { Err(PENDING.into()) }
-#[tauri::command]
-pub fn undo_receipt(_receipt_id: String) -> CmdResult<()> { Err(PENDING.into()) }
-#[tauri::command]
-pub fn recycle_files(_ids: Vec<String>) -> CmdResult<Receipt> { Err(PENDING.into()) }
-#[tauri::command]
-pub fn recycle_duplicates(_sel: Vec<DupSelection>) -> CmdResult<Receipt> { Err(PENDING.into()) }
-#[tauri::command]
-pub fn start_migration(_move_id: String, _to: String, _opts: MigrateOptions) -> CmdResult<()> { Err(PENDING.into()) }
-#[tauri::command]
-pub fn resume_migration(_move_id: String) -> CmdResult<()> { Err(PENDING.into()) }
-#[tauri::command]
-pub fn dry_run_rule(_id: String) -> RuleRun { RuleRun::default() }
-#[tauri::command]
-pub fn run_rule(_id: String) -> CmdResult<serde_json::Value> { Err(PENDING.into()) }
-#[tauri::command]
-pub fn undo_activity(_id: String) -> CmdResult<()> { Err(PENDING.into()) }

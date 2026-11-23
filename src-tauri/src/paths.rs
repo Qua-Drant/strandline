@@ -29,11 +29,10 @@ pub fn expand_env(s: &str) -> String {
 pub fn display(p: &Path) -> String {
     let s = p.to_string_lossy().to_string();
     for var in ["LOCALAPPDATA", "APPDATA", "TEMP", "USERPROFILE"] {
-        if let Ok(v) = std::env::var(var) {
-            if !v.is_empty() && starts_with_ci(&s, &v) {
+        if let Ok(v) = std::env::var(var)
+            && !v.is_empty() && starts_with_ci(&s, &v) {
                 return format!("%{var}%{}", &s[v.len()..]);
             }
-        }
     }
     s
 }

@@ -76,7 +76,7 @@ export function Large() {
     await reload(); await refreshDrives();
     if (rc.items.length) {
       sound.wash(false, 460);
-      pushToast({ kind: 'ok', title: rc.items.length + ' 个文件已移入回收站', sub: rc.bin.toFixed(1) + ' GB · 清空回收站后才会腾出', action: '撤销',
+      pushToast({ kind: 'ok', title: rc.items.length + ' 个文件已移入回收站', sub: (rc.bin >= 1 ? rc.bin.toFixed(1) + ' GB' : Math.round(rc.bin * 1024) + ' MB') + ' · 清空回收站后才会腾出', action: '撤销',
         run: async () => { await diskService.undoReceipt(rc.id); await reload(); await refreshDrives(); } }, 8000);
     }
     skippedToast(rc, pushToast);

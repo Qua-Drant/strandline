@@ -63,7 +63,7 @@ export function Dupes() {
     const rc = await diskService.recycleDuplicates(GROUPS.map((g) => ({ groupId: g.id, keep: keepOf(g) })));
     setReceipt(rc); await reload(); await refreshDrives();
     sound.wash(false, 460);
-    pushToast({ kind: 'ok', title: rc.items.length + ' 份副本已移入回收站', sub: rc.bin.toFixed(1) + ' GB · 清空回收站后释放', action: '撤销', run: () => void undo() }, 8000);
+    pushToast({ kind: 'ok', title: rc.items.length + ' 份副本已移入回收站', sub: fmt(rc.bin) + ' · 清空回收站后释放', action: '撤销', run: () => void undo() }, 8000);
     skippedToast(rc, pushToast);
   };
 
@@ -117,7 +117,7 @@ export function Dupes() {
         {!done && groups !== null && !GROUPS.length && <div className="muted" style={{ padding: '3rem 0', textAlign: 'center' }}>没有发现完全相同的文件</div>}
         {done && (
           <div style={{ display: 'grid', justifyItems: 'center', gap: '0.5rem', padding: '3rem 0' }} className="muted">
-            <span>{receipt!.items.length} 份副本已移入回收站 · {receipt!.bin.toFixed(1)} GB，清空回收站后释放</span>
+            <span>{receipt!.items.length} 份副本已移入回收站 · {fmt(receipt!.bin)}，清空回收站后释放</span>
             <button type="button" className="link-btn" onClick={() => void undo()}>撤销</button>
           </div>
         )}

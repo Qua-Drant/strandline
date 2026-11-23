@@ -22,6 +22,12 @@ pub struct UndoRecord {
     /// receipt item id → (from, to) moves done by a rule, undone by moving back
     #[serde(default)]
     pub moved: BTreeMap<String, Vec<(String, String)>>,
+    /// a finished migration: (original path, backup path, backup is in the Recycle Bin)
+    #[serde(default)]
+    pub migration: Option<(String, String, bool)>,
+    /// map block ids to mark as cleaned / not cleaned
+    #[serde(default)]
+    pub blocks: Vec<String>,
     pub at: i64,
 }
 
@@ -73,11 +79,10 @@ impl Store {
 
     /// %APPDATA%\Strandline, or `STRANDLINE_DATA_DIR` (used for development and end-to-end tests).
     pub fn default_dir() -> PathBuf {
-        if let Ok(d) = std::env::var("STRANDLINE_DATA_DIR") {
-            if !d.trim().is_empty() {
+        if let Ok(d) = std::env::var("STRANDLINE_DATA_DIR")
+            && !d.trim().is_empty() {
                 return PathBuf::from(d);
             }
-        }
         dirs::data_dir().unwrap_or_else(std::env::temp_dir).join("Strandline")
     }
 
@@ -145,7 +150,7 @@ fn when(pairs: &[(&str, &str)]) -> Vec<(String, String)> {
 pub fn default_rules() -> Vec<Rule> {
     let r = |id: &str, name: &str, sched: &str, lv: &str, action: &str, w: &[(&str, &str)]| Rule {
         id: id.into(), name: name.into(), on: false, sched: sched.into(), lv: lv.into(), action: action.into(),
-        when: when(w), last: "尚未运行".into(), files: vec![],
+        when: when(w), last: "尚未运行".into(), files: vec![], last_run: 0,
     };
     vec![
         r("r1", "安装包放了 30 天后移入回收站", "day", "L2", "移入回收站 · 可撤销", &[("位置", "下载"), ("类型", ".exe .msi"), ("早于", "30 天")]),

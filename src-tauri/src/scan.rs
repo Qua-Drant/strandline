@@ -73,6 +73,53 @@ impl ScanResult {
     }
 }
 
+impl ScanResult {
+    /// Forget a path after it was recycled or moved away: its bytes leave every ancestor's total.
+    pub fn forget(&mut self, p: &Path) {
+        let k = key(p);
+        let bytes = self.stat(p).map(|d| d.size).unwrap_or_else(|| self.files.iter().find(|f| key(&f.path) == k).map(|f| f.size).unwrap_or(0));
+        let prefix = format!("{k}\\");
+        self.dirs.retain(|d, _| *d != k && !d.starts_with(&prefix));
+        self.files.retain(|f| { let fk = key(&f.path); fk != k && !fk.starts_with(&prefix) });
+        self.node_modules.retain(|x| !crate::paths::is_within(x, p));
+        self.cargo_targets.retain(|x| !crate::paths::is_within(x, p));
+        self.adjust_ancestors(p, -(bytes as i64));
+        self.total = self.total.saturating_sub(bytes);
+    }
+
+    /// Count a path again after it was restored.
+    pub fn add_tree(&mut self, p: &Path) {
+        if !p.exists() { return; }
+        let roots = self.roots.clone();
+        if let Some(sub) = scan(p, &roots, &[], &AtomicBool::new(false), |_| {}) {
+            let bytes = sub.total;
+            for (k, v) in sub.dirs { self.dirs.insert(k, v); }
+            if std::fs::metadata(p).map(|m| m.is_file()).unwrap_or(false) {
+                let md = std::fs::metadata(p).unwrap();
+                if md.len() >= MIN_FILE { self.files.push(FileRec { path: p.to_path_buf(), size: md.len(), mtime: ms(md.modified()), atime: ms(md.accessed()) }); }
+                self.adjust_ancestors(p, md.len() as i64);
+                self.total += md.len();
+                return;
+            }
+            self.files.extend(sub.files);
+            self.node_modules.extend(sub.node_modules);
+            self.cargo_targets.extend(sub.cargo_targets);
+            self.adjust_ancestors(p, bytes as i64);
+            self.total += bytes;
+        }
+    }
+
+    fn adjust_ancestors(&mut self, p: &Path, delta: i64) {
+        let mut cur = p.parent();
+        while let Some(a) = cur {
+            if let Some(d) = self.dirs.get_mut(&key(a)) {
+                d.size = (d.size as i64 + delta).max(0) as u64;
+            }
+            cur = a.parent();
+        }
+    }
+}
+
 pub struct Progress {
     pub files: u64,
     pub bytes: u64,
@@ -191,6 +238,17 @@ mod tests {
         assert_eq!(r.node_modules.len(), 1);
         assert_eq!(r.cargo_targets.len(), 1);
         assert!(r.files.iter().any(|f| f.path.ends_with("ubuntu-24.04-desktop-amd64.iso")));
+
+        // forget / add back keep the totals right
+        let mut r = r;
+        let before = r.total;
+        r.forget(&pip);
+        assert_eq!(r.total, before - 6 * 60 * 1024 * 1024);
+        assert_eq!(r.stat(&root).unwrap().size, r.total);
+        assert!(r.stat(&pip).is_none());
+        r.add_tree(&pip);
+        assert_eq!(r.total, before);
+        assert_eq!(r.stat(&root).unwrap().size, before);
     }
 
     #[test]

@@ -194,6 +194,9 @@ pub struct Rule {
     pub when: Vec<(String, String)>,
     pub last: String,
     pub files: Vec<(String, f64)>,
+    /// ms epoch of the last run (scheduler)
+    #[serde(default, rename = "lastRun")]
+    pub last_run: i64,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
