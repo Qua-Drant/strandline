@@ -74,7 +74,7 @@ function useMergeState<T extends object>(init: T) {
 
 export function MapPage() {
   const shell = useShell();
-  const { cFree: freeNow, sys, drives, refreshDrives, pushToast, setPal, pal, setTask, setWriting, setSuggestN, setScanAt, appEl } = shell;
+  const { cFree: sysFree, sys, drives, refreshDrives, pushToast, setPal, pal, setTask, setWriting, setSuggestN, setScanAt, appEl } = shell;
   const [s, set, sref] = useMergeState(INIT);
   const ebbT = useRef<number[]>([]);
   const mapEl = useRef<HTMLElement | null>(null);
@@ -88,6 +88,8 @@ export function MapPage() {
   const LEAVES: Leaf[] = model.leaves, CATS: Cat[] = model.cats, MOVES: Move[] = model.moves;
   const LEAF: Record<string, Leaf> = Object.fromEntries(LEAVES.map((l) => [l.id, l]));
   const TOTAL = model.drive.total, FREE30 = model.drive.free30, HIST30 = model.history30;
+  // the scanned drive may not be the system drive (e.g. a sandbox folder on D:)
+  const freeNow = s.model && model.drive.id !== sys.id ? (drives.find((d) => d.id === model.drive.id)?.free ?? model.drive.free) : sysFree;
   const FREE0 = s.free0 ?? freeNow;
   const moveOf = (id: string | null) => MOVES.find((m) => m.id === id);
   const reloadModel = async () => {
@@ -140,7 +142,9 @@ export function MapPage() {
     set({ phase: 'scanning', p: 0, confirm: false, overlay: null, dOpen: false, pinned: null, hover: null, drag: null });
     try {
       const m = await diskService.scan(sys.id, (pr) => set({ p: pr.p }));
-      set({ model: m, p: 100, phase: 'results' });
+      // first scan of this target: tick every rebuildable block, as the design does
+      set((prev) => ({ model: m, p: 100, phase: 'results', free0: prev.free0 ?? m.drive.free,
+        checked: prev.checked && Object.keys(prev.checked).length ? prev.checked : Object.fromEntries(m.leaves.filter((l) => l.level === 'L1' && !l.cleaned && l.gb > 0.05).map((l) => [l.id, true])) }));
       setScanAt(m.scannedAt);
       await refreshDrives();
       const v = m.leaves.filter((l) => ['L1', 'L2', 'L3'].includes(l.level) && !l.cleaned && l.gb > 0.05).reduce((a, l) => a + (l.level === 'L2' ? Math.min(l.gain, l.gb) : l.gb), 0);
@@ -598,7 +602,7 @@ export function MapPage() {
     <Shell path={PATHS.map} palette={<MapPalette checked={checked} leaves={LEAVES} cats={CATS} moves={MOVES} sysId={sys.id} set={set} close={() => setPal(false)} level={level} size={size} selectable={selectable} moveGb={moveGb}
       setMode={setMode} rescan={() => void rescan()} openDetail={openDetail} openMove={openMove} openBell={() => openOverlay('bell')} />}>
       <div className="hdr">
-        <nav aria-label="位置" className="crumb"><span className="muted">{sys.id}: {sys.name}</span><span className="muted" aria-hidden="true">/</span><span>空间地图</span></nav>
+        <nav aria-label="位置" className="crumb"><span className="muted">{s.model ? model.drive.id + ': ' + model.drive.name : sys.id + ': ' + sys.name}</span><span className="muted" aria-hidden="true">/</span><span>空间地图</span></nav>
         <Seg label="地图显示" value={mode} onPick={setMode} items={segItems} />
         <span style={{ flex: '1 1 auto' }} />
         <span className={'atmo-tag t-' + atmo} role="status"><i aria-hidden="true" />{ATMO_TEXT[atmo]}</span>
@@ -656,11 +660,11 @@ export function MapPage() {
                 <span className="tm-dot" style={{ left: (tc / tN * 100).toFixed(2) + '%', top: (tpy(tvals[tc]) / 44 * 100).toFixed(2) + '%' }} aria-hidden="true" />
               </>}
             </div>
-            <div className="tm-cap" aria-hidden="true"><span className={cx('tm-t', tc === null && 'on')}>30天前 87G → 今日 {Math.round(freeNow)}G</span><span className={cx('tm-t mono', tc !== null && 'on')}>{tc === null ? '' : tdesc(tc)}</span></div>
+            <div className="tm-cap" aria-hidden="true"><span className={cx('tm-t', tc === null && 'on')}>30天前 {Math.round(tvals[0])}G → 今日 {Math.round(freeNow)}G</span><span className={cx('tm-t mono', tc !== null && 'on')}>{tc === null ? '' : tdesc(tc)}</span></div>
             <div className="capbar" role="img" aria-label={`${sys.id}: 已用 ${used.toFixed(1)} GB，共 ${Math.round(TOTAL)} GB；30 天前已用 ${Math.round(TOTAL - FREE30)} GB`}>
               <span className="cb-used" style={{ flex: '0 0 ' + pc(Math.max(0, used - selFree), TOTAL) }} /><span className="cb-gain" style={{ flex: '0 0 ' + pc(selFree, TOTAL) }} /><span className="cb-tide" style={{ left: pc(used30, TOTAL) }} />
             </div>
-            <div className="cb-cap"><span className="mono">已用 {used.toFixed(1)} / 512 GB</span><span className="tide"><i />30 天前</span></div>
+            <div className="cb-cap"><span className="mono">已用 {used.toFixed(1)} / {Math.round(TOTAL)} GB</span><span className="tide"><i />30 天前</span></div>
           </div>
 
           {isResults && !spot && <>

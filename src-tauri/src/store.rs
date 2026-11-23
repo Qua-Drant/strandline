@@ -38,9 +38,9 @@ pub struct Data {
     pub history: BTreeMap<String, BTreeMap<i64, f64>>,
     #[serde(default)]
     pub undo: BTreeMap<String, UndoRecord>,
-    /// drive → path → GB from the previous scan (for "30 天里涨得最多")
+    /// drive → day → block name → GB, one snapshot per day (for "30 天里涨得最多")
     #[serde(default)]
-    pub sizes: BTreeMap<String, BTreeMap<String, (f64, i64)>>,
+    pub sizes: BTreeMap<String, BTreeMap<i64, BTreeMap<String, f64>>>,
     #[serde(default)]
     pub seq: u64,
 }
@@ -71,7 +71,13 @@ impl Store {
         Store { dir, data }
     }
 
+    /// %APPDATA%\Strandline, or `STRANDLINE_DATA_DIR` (used for development and end-to-end tests).
     pub fn default_dir() -> PathBuf {
+        if let Ok(d) = std::env::var("STRANDLINE_DATA_DIR") {
+            if !d.trim().is_empty() {
+                return PathBuf::from(d);
+            }
+        }
         dirs::data_dir().unwrap_or_else(std::env::temp_dir).join("Strandline")
     }
 
@@ -103,6 +109,20 @@ impl Store {
     pub fn free_days_ago(&self, drive: &str, days_ago: i64) -> Option<f64> {
         let day = now_ms() / DAY_MS - days_ago;
         self.data.history.get(drive)?.range(..=day).next_back().map(|(_, v)| *v)
+    }
+
+    /// Keep today's block sizes for a drive (40 days kept).
+    pub fn snapshot_sizes(&mut self, drive: &str, sizes: BTreeMap<String, f64>) {
+        let day = now_ms() / DAY_MS;
+        let h = self.data.sizes.entry(drive.to_string()).or_default();
+        h.insert(day, sizes);
+        h.retain(|d, _| *d >= day - 40);
+    }
+
+    /// The oldest snapshot from 1–35 days ago.
+    pub fn old_sizes(&self, drive: &str) -> Option<&BTreeMap<String, f64>> {
+        let day = now_ms() / DAY_MS;
+        self.data.sizes.get(drive)?.range(day - 35..day).next().map(|(_, v)| v)
     }
 
     pub fn log(&mut self, mut e: ActivityEvent) -> String {
@@ -152,7 +172,7 @@ mod tests {
 
     #[test]
     fn settings_round_trip_and_defaults() {
-        let dir = tempfile::tempdir().unwrap();
+        let dir = crate::testutil::tmp();
         {
             let mut s = Store::open(dir.path().to_path_buf());
             assert_eq!(s.data.rules.len(), 3);

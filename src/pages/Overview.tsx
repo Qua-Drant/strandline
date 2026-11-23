@@ -111,7 +111,9 @@ export function Overview() {
             <div className="hello-t">
               <p className="eyebrow">{today.getMonth() + 1} 月 {today.getDate()} 日 · 星期{WEEK[today.getDay()]}</p>
               <h1 className="hello-h">{fdone ? greeting() + '，' + sys.id + ' 盘腾出了 ' + foamFreed.toFixed(1) + ' GB' : greeting() + '，' + sys.id + (atmo === 'lo' ? ' 盘空间充足' : ' 盘快满了')}</h1>
-              <p className="hello-s">{fdone
+              <p className="hello-s">{model && !model.scannedAt
+                ? '还没有扫描过 ' + sys.id + ': 盘。点右上角「重新扫描全部磁盘」开始，只读取文件夹结构和大小，不读文件内容。'
+                : fdone
                 ? '清掉 ' + foamRows.length + ' 项会自动重建的缓存后，' + sys.id + ' 盘回到 ' + cf.toFixed(1) + ' GB 可用。剩下的需要你看一眼再决定。'
                 : sys.id + ' 盘只剩 ' + cf.toFixed(1) + ' GB 可用（' + (cf / sys.total * 100).toFixed(1) + '%）。可重建的 ' + k1.toFixed(1) + ' GB 里，有 ' + foamGb.toFixed(1) + ' GB 缓存可以放心一键清理。'}</p>
             </div>

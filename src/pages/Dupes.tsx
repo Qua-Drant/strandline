@@ -72,7 +72,7 @@ export function Dupes() {
       <PageHeader crumb={[sys.id + ' 盘', '重复文件']} />
       <Scroll className="pg lp dpx">
         <section className="collate" aria-label="重复文件概况">
-          <div className="co-n"><span className="mono">{done ? '0.0' : reclaim.toFixed(1)}</span><span className="u">GB</span>
+          <div className="co-n"><span className="mono">{done ? '0.0' : reclaim >= 1 ? reclaim.toFixed(1) : Math.round(reclaim * 1024)}</span><span className="u">{reclaim >= 1 || done ? 'GB' : 'MB'}</span>
             <span className="co-s"><span>{GROUPS.length} 组完全相同的文件</span><span>每组留一份原件，其余 {done ? 0 : nCopies} 份副本移入回收站</span></span></div>
           <div className="co-src" role="group" aria-label="多出来的副本从哪来，点选只看这一处">
             <button type="button" className={cx('pile pile-all', !place && 'is-on')} aria-pressed={!place} onClick={() => setPlace(null)}>
@@ -122,7 +122,7 @@ export function Dupes() {
           </div>
         )}
         <div className="dockw"><div className={cx('dock', !done && 'is-active')} role="region" aria-label="操作">
-          <span className="dk-sel"><b>{done ? '没有待处理的重复文件' : nCopies + ' 份副本 · ' + reclaim.toFixed(1) + ' GB 移入回收站'}</b><span>{done ? '' : '每组都会留下一份原件'}</span></span>
+          <span className="dk-sel"><b>{done ? '没有待处理的重复文件' : nCopies + ' 份副本 · ' + fmt(reclaim) + ' 移入回收站'}</b><span>{done ? '' : '每组都会留下一份原件'}</span></span>
           <span className="dk-note">清空回收站后才会腾出磁盘空间 · 30 天内可撤销 · 内容按哈希比对，只在本机计算</span>
           <button type="button" className="btn btn-primary" disabled={done || !GROUPS.length} onClick={() => void run()}>移入回收站</button>
         </div></div>

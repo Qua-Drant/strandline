@@ -1,18 +1,39 @@
 //! Strandline backend: read-only scanning, Recycle-Bin-first cleaning, verified migration,
 //! rules and local persistence. Every write goes through `guard` first.
 
+pub mod catalog;
 pub mod drives;
+pub mod finder;
+pub mod guard;
 pub mod model;
 pub mod paths;
+pub mod sandbox;
+pub mod scan;
 pub mod store;
+pub mod timefmt;
+#[cfg(test)]
+mod testutil;
 
 mod commands;
 
-use std::sync::Mutex;
+use std::collections::HashSet;
+use std::sync::atomic::AtomicBool;
+use std::sync::{Arc, Mutex};
 use store::Store;
 
 pub struct AppState {
     pub store: Mutex<Store>,
+    /// last scan (map model, suggestions, file index)
+    pub scan: Mutex<Option<commands::Scanned>>,
+    pub cancel: Arc<AtomicBool>,
+    /// map blocks cleaned since the last scan
+    pub cleaned: Mutex<HashSet<String>>,
+}
+
+impl AppState {
+    pub fn new(store: Store) -> Self {
+        AppState { store: Mutex::new(store), scan: Mutex::new(None), cancel: Arc::new(AtomicBool::new(false)), cleaned: Mutex::new(HashSet::new()) }
+    }
 }
 
 pub fn run() {
@@ -23,7 +44,7 @@ pub fn run() {
             }
             Ok(())
         })
-        .manage(AppState { store: Mutex::new(Store::open(Store::default_dir())) })
+        .manage(AppState::new(Store::open(Store::default_dir())))
         .invoke_handler(tauri::generate_handler![
             commands::list_drives, commands::get_map_model, commands::scan_drive, commands::cancel_scan,
             commands::get_suggestions, commands::clean_items, commands::undo_item, commands::undo_receipt,

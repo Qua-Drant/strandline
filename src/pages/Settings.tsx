@@ -42,7 +42,10 @@ export function Settings() {
   const [sec, setSec] = useState('set-general');
   const [st, reload] = useData(() => diskService.getSettings());
   if (!st) return <PageHeader crumb={['设置']} />;
-  const put = async (patch: Partial<SettingsData>) => { await diskService.saveSettings(patch); await reload(); };
+  const put = async (patch: Partial<SettingsData>) => {
+    try { await diskService.saveSettings(patch); } catch (e) { pushToast({ kind: 'err', title: '设置没有保存', sub: String(e) }, 9000); }
+    await reload();
+  };
   const sw: Record<SwKey, boolean> = { ...SWD, ...Object.fromEntries(Object.keys(SWD).map((k) => [k, st[k as SwKey]])), sound: sound.enabled() } as Record<SwKey, boolean>;
   const { close, bin, drives, excl } = st;
   const setClose = (v: SettingsData['close']) => void put({ close: v });
