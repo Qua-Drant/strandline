@@ -2,8 +2,18 @@
 //!
 //! One pass with `jwalk` (directory reads run on a rayon pool) collects, for every directory, the
 //! total size and newest modification time of its subtree, plus every file ≥ 1 MiB (for the
-//! large-file and duplicate finders). Links and junctions are never followed, unreadable folders are
-//! skipped, and progress is reported through a throttled callback so the UI never blocks.
+//! large-file and duplicate finders). Progress is reported through a throttled callback so the UI never
+//! blocks.
+//!
+//! Counting rules (what "size" means here):
+//! * symbolic links, junctions and volume mount points are never followed and add nothing — no loops,
+//!   no folder counted twice (e.g. `C:\Documents and Settings`, OneDrive junctions);
+//! * a hard-linked file is counted once (checked for files ≥ 1 MiB and everything under %SystemRoot%,
+//!   where WinSxS and System32 share most files);
+//! * cloud placeholders (online-only OneDrive / iCloud files) add nothing and are never opened —
+//!   their bytes are not on this disk; they are counted separately;
+//! * sizes are logical sizes (a sparse file counts its full length);
+//! * folders and files we may not read are skipped without stopping the scan, and counted.
 
 use crate::guard;
 use crate::sandbox::Roots;
@@ -45,6 +55,25 @@ pub struct ScanResult {
     pub nfiles: u64,
     pub at: i64,
     pub took: Duration,
+    /// folders / files we could not read (no permission, in use, vanished)
+    pub skipped: u64,
+    /// online-only cloud files (not counted, never opened)
+    pub cloud_files: u64,
+    pub cloud_bytes: u64,
+    /// extra paths to an already counted hard-linked file
+    pub hardlinks: u64,
+}
+
+/// Per-file facts gathered on the walker's worker threads.
+#[derive(Debug, Default, Clone)]
+pub struct Info {
+    pub ok: bool,
+    pub size: u64,
+    pub mtime: i64,
+    pub atime: i64,
+    pub attrs: u32,
+    /// (volume serial, file index) when the file has more than one link
+    pub link: Option<(u32, u64)>,
 }
 
 pub fn key(p: &Path) -> String {
@@ -125,26 +154,51 @@ pub struct Progress {
     pub bytes: u64,
 }
 
-/// Walk `root`. `excluded` folders (lower-cased keys) are skipped. Returns None when cancelled.
+/// Walk `root`. `excluded` folders are skipped. Returns None when cancelled.
 pub fn scan(root: &Path, roots: &Roots, excluded: &[PathBuf], cancel: &AtomicBool, mut on_progress: impl FnMut(&Progress)) -> Option<ScanResult> {
+    use std::sync::atomic::AtomicU64;
+    use std::sync::Arc;
     let started = Instant::now();
     let excl: Vec<String> = excluded.iter().map(|p| key(p)).collect();
     let roots_c = roots.clone();
+    let sysroot = key(&roots.windows);
+    let skipped = Arc::new(AtomicU64::new(0));
+    let skipped_w = skipped.clone();
     let threads = std::thread::available_parallelism().map(|n| n.get()).unwrap_or(4).clamp(2, 16);
-    let walker = WalkDirGeneric::<((), ())>::new(root)
+    let walker = WalkDirGeneric::<((), Info)>::new(root)
         .skip_hidden(false)
         .follow_links(false)
         .parallelism(Parallelism::RayonNewPool(threads))
         .process_read_dir(move |_, path, _, children| {
-            // drop excluded / system-noise folders before they are read
-            children.retain(|c| match c {
+            // runs on worker threads: drop excluded folders, and read file metadata here in parallel
+            let in_sys = { let k = key(path); k == sysroot || k.starts_with(&format!("{sysroot}\\")) };
+            children.retain_mut(|c| match c {
                 Ok(e) if e.file_type.is_dir() => {
                     let p = path.join(&e.file_name);
                     let k = key(&p);
                     !excl.iter().any(|x| k == *x || k.starts_with(&format!("{x}\\"))) && !guard::skip_when_scanning(&p, &roots_c)
                 }
-                Ok(_) => true,
-                Err(_) => false,
+                Ok(e) if e.file_type.is_file() => {
+                    let p = path.join(&e.file_name);
+                    // symlink_metadata opens with "open reparse point": never recalls cloud content
+                    match std::fs::symlink_metadata(&p) {
+                        Ok(md) => {
+                            #[cfg(windows)]
+                            let attrs = { use std::os::windows::fs::MetadataExt; md.file_attributes() };
+                            #[cfg(not(windows))]
+                            let attrs = 0u32;
+                            let mut info = Info { ok: true, size: md.len(), mtime: ms(md.modified()), atime: ms(md.accessed()), attrs, link: None };
+                            if !crate::winfs::is_cloud_attrs(attrs) && (md.len() >= MIN_FILE || in_sys)
+                                && let Some((vol, idx, n)) = crate::winfs::file_id(&p)
+                                    && n > 1 { info.link = Some((vol, idx)); }
+                            e.client_state = info;
+                        }
+                        Err(_) => { skipped_w.fetch_add(1, Ordering::Relaxed); }
+                    }
+                    true
+                }
+                Ok(_) => true, // links, junctions: kept as entries but never followed or counted
+                Err(_) => { skipped_w.fetch_add(1, Ordering::Relaxed); false }
             });
         });
 
@@ -152,18 +206,26 @@ pub fn scan(root: &Path, roots: &Roots, excluded: &[PathBuf], cancel: &AtomicBoo
     let mut files = Vec::new();
     let mut node_modules = Vec::new();
     let mut cargo_targets = Vec::new();
-    let mut nfiles = 0u64;
-    let mut total = 0u64;
+    let mut seen_links: std::collections::HashSet<(u32, u64)> = std::collections::HashSet::new();
+    let (mut nfiles, mut total, mut cloud_files, mut cloud_bytes, mut hardlinks) = (0u64, 0u64, 0u64, 0u64, 0u64);
     let mut last = Instant::now();
 
     for entry in walker {
         if cancel.load(Ordering::Relaxed) {
             return None;
         }
-        let Ok(e) = entry else { continue };
+        let Ok(e) = entry else {
+            // a folder that could not be read (access denied, vanished)
+            skipped.fetch_add(1, Ordering::Relaxed);
+            continue;
+        };
         let ft = e.file_type;
         let path = e.path();
         if ft.is_dir() {
+            if e.read_children_error.is_some() {
+                // listed, but its contents could not be read (access denied, in use)
+                skipped.fetch_add(1, Ordering::Relaxed);
+            }
             own.entry(key(&path)).or_default();
             if e.file_name == "node_modules" && !path.parent().map(|p| p.to_string_lossy().to_lowercase().contains("\\node_modules")).unwrap_or(false) {
                 node_modules.push(path.clone());
@@ -173,11 +235,23 @@ pub fn scan(root: &Path, roots: &Roots, excluded: &[PathBuf], cancel: &AtomicBoo
             continue;
         }
         if !ft.is_file() {
-            continue; // symlinks, junctions and other reparse points are not followed or counted
+            continue; // symlinks, junctions and other name-surrogate reparse points are not followed or counted
         }
-        let Ok(md) = e.metadata() else { continue };
-        let size = md.len();
-        let mtime = ms(md.modified());
+        let info = &e.client_state;
+        if !info.ok {
+            continue; // metadata unreadable: already counted as skipped
+        }
+        if crate::winfs::is_cloud_attrs(info.attrs) {
+            cloud_files += 1;
+            cloud_bytes += info.size;
+            continue;
+        }
+        if let Some(id) = info.link
+            && !seen_links.insert(id) {
+                hardlinks += 1;
+                continue;
+            }
+        let (size, mtime) = (info.size, info.mtime);
         nfiles += 1;
         total += size;
         if let Some(parent) = path.parent() {
@@ -187,7 +261,7 @@ pub fn scan(root: &Path, roots: &Roots, excluded: &[PathBuf], cancel: &AtomicBoo
             d.newest = d.newest.max(mtime);
         }
         if size >= MIN_FILE {
-            files.push(FileRec { path: path.clone(), size, mtime, atime: ms(md.accessed()) });
+            files.push(FileRec { path: path.clone(), size, mtime, atime: info.atime });
         }
         if last.elapsed() >= Duration::from_millis(150) {
             last = Instant::now();
@@ -214,7 +288,8 @@ pub fn scan(root: &Path, roots: &Roots, excluded: &[PathBuf], cancel: &AtomicBoo
         }
     }
     on_progress(&Progress { files: nfiles, bytes: total });
-    Some(ScanResult { roots: roots.clone(), dirs, files, node_modules, cargo_targets, total, nfiles, at: crate::store::now_ms(), took: started.elapsed() })
+    Some(ScanResult { roots: roots.clone(), dirs, files, node_modules, cargo_targets, total, nfiles, at: crate::store::now_ms(), took: started.elapsed(),
+        skipped: skipped.load(Ordering::Relaxed), cloud_files, cloud_bytes, hardlinks })
 }
 
 #[cfg(test)]

@@ -52,6 +52,20 @@ export interface MapModel {
   history30: number[];
   /** "HH:MM" of the last scan */
   scannedAt: string;
+  /** desktop: what the scan counted and left out */
+  stats?: ScanStats;
+}
+
+export interface ScanStats {
+  files: number;
+  /** folders / files that could not be read (no permission, in use) */
+  skipped: number;
+  /** online-only cloud files: not counted, never opened */
+  cloudFiles: number;
+  cloudGb: number;
+  /** extra paths to hard-linked files, counted once */
+  hardlinks: number;
+  tookSec: number;
 }
 
 export interface ScanProgress {
@@ -164,4 +178,8 @@ export interface Settings {
   excl: string[];
   /** folder scanned instead of a whole drive (sandbox mode for development); "" = scan the drive */
   scanRoot: string;
+  /** scan only: the desktop backend refuses every write */
+  readOnly: boolean;
+  /** the first-run safety notice was answered */
+  ackSafety: boolean;
 }

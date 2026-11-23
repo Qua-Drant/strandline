@@ -74,6 +74,23 @@ pub struct MapModel {
     pub bin: f64,
     pub history30: Vec<f64>,
     pub scanned_at: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub stats: Option<ScanStats>,
+}
+
+/// What the scan counted and what it left out.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ScanStats {
+    pub files: u64,
+    /// folders / files that could not be read (no permission, in use)
+    pub skipped: u64,
+    /// online-only cloud files: not counted, never opened
+    pub cloud_files: u64,
+    pub cloud_gb: f64,
+    /// extra paths to hard-linked files, counted once
+    pub hardlinks: u64,
+    pub took_sec: f64,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -284,6 +301,10 @@ pub struct Settings {
     pub drives: BTreeMap<String, bool>,
     pub excl: Vec<String>,
     pub scan_root: String,
+    /// scan only: every write (clean, recycle, migrate, rules) is refused by the backend
+    pub read_only: bool,
+    /// the first-run safety notice was answered
+    pub ack_safety: bool,
 }
 
 impl Default for Settings {
@@ -303,6 +324,8 @@ impl Default for Settings {
             drives: BTreeMap::new(),
             excl: Vec::new(),
             scan_root: String::new(),
+            read_only: true,
+            ack_safety: false,
         }
     }
 }

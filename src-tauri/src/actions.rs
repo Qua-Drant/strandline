@@ -21,6 +21,14 @@ const GB: f64 = 1024.0 * 1024.0 * 1024.0;
 fn gb(b: u64) -> f64 { b as f64 / GB }
 fn fmt_gb(g: f64) -> String { if g >= 1.0 { format!("{g:.1} GB") } else { format!("{:.0} MB", g * 1024.0) } }
 
+/// Every write command starts here: in read-only mode nothing on disk is changed.
+fn writable(state: &AppState) -> CmdResult<()> {
+    if lock(&state.store).data.settings.read_only {
+        return Err("只读模式：Strandline 现在只扫描，不移动、不删除任何文件。要清理或迁移，请在 设置 › 清理与安全 里关闭只读模式".into());
+    }
+    Ok(())
+}
+
 fn app_data(state: &AppState) -> PathBuf {
     lock(&state.store).dir().to_path_buf()
 }
@@ -69,6 +77,7 @@ pub async fn clean_items(app: AppHandle, drive: String, ids: Vec<String>) -> Cmd
     let a = app.clone();
     blocking(move || {
         let state = a.state::<AppState>();
+        writable(&state)?;
         if !current(&state, &drive) { return Err("请先重新扫描".into()); }
         let roots = roots_for(&state, &drive)?;
         let app_dir = app_data(&state);
@@ -87,7 +96,7 @@ pub async fn clean_items(app: AppHandle, drive: String, ids: Vec<String>) -> Cmd
                         Ok(()) => {
                             rc.freed += gb(before);
                             rc.items.push(ReceiptItem { id: id.clone(), name: plan.name.clone(), act: "empty".into(), level: plan.level.clone(), gb: gb(before), undoable: false });
-                            lock(&state.cleaned).insert(id.clone());
+                            if let Some(sc) = lock(&state.scan).as_mut() { sc.cleaned.insert(id.clone()); }
                         }
                         Err(e) => rc.skipped.push(Skipped { name: plan.name.clone(), reason: e }),
                     }
@@ -103,7 +112,7 @@ pub async fn clean_items(app: AppHandle, drive: String, ids: Vec<String>) -> Cmd
                 rec.recycled.insert(id.clone(), o.recycled.iter().map(|x| x.0.to_string_lossy().to_string()).collect());
                 rec.blocks.push(id.clone());
                 gone.extend(o.recycled.iter().map(|x| x.0.clone()));
-                lock(&state.cleaned).insert(id.clone());
+                if let Some(sc) = lock(&state.scan).as_mut() { sc.cleaned.insert(id.clone()); }
             }
             rc.skipped.extend(o.skipped);
         }
@@ -130,8 +139,9 @@ fn undo_paths(state: &AppState, rec: &UndoRecord, item: Option<&str>) -> CmdResu
         }
     add_back_to_scan(state, &paths);
     {
-        let mut c = lock(&state.cleaned);
-        for b in &rec.blocks { if item.map(|i| i == b).unwrap_or(true) { c.remove(b); } }
+        if let Some(sc) = lock(&state.scan).as_mut() {
+            for b in &rec.blocks { if item.map(|i| i == b).unwrap_or(true) { sc.cleaned.remove(b); } }
+        }
     }
     if failed.is_empty() { Ok(()) } else { Err(format!("{} 项没能恢复（原位置已有同名文件或回收站里找不到）：{}", failed.len(), failed.join("、"))) }
 }
@@ -189,6 +199,7 @@ pub async fn recycle_files(app: AppHandle, ids: Vec<String>) -> CmdResult<Receip
     let a = app.clone();
     blocking(move || {
         let state = a.state::<AppState>();
+        writable(&state)?;
         let (paths, roots) = {
             let g = lock(&state.scan);
             let sc = g.as_ref().ok_or("请先扫描")?;
@@ -219,6 +230,7 @@ pub async fn recycle_duplicates(app: AppHandle, sel: Vec<DupSelection>) -> CmdRe
     let a = app.clone();
     blocking(move || {
         let state = a.state::<AppState>();
+        writable(&state)?;
         let (groups, roots) = {
             let g = lock(&state.scan);
             let sc = g.as_ref().ok_or("请先扫描")?;
@@ -280,6 +292,7 @@ fn apps_for(move_id: &str) -> (Vec<String>, String) {
 
 #[tauri::command]
 pub fn start_migration(app: AppHandle, state: State<AppState>, move_id: String, to: String, opts: MigrateOptions) -> CmdResult<()> {
+    writable(&state)?;
     if lock(&state.migration).is_some() { return Err("已经有一个迁移在进行".into()); }
     let (src, drive, roots) = {
         let g = lock(&state.scan);
@@ -364,6 +377,7 @@ pub fn dry_run_rule(state: State<AppState>, id: String) -> CmdResult<RuleRun> {
 }
 
 fn execute_rule(state: &AppState, id: &str) -> CmdResult<(RuleRun, String)> {
+    writable(state)?;
     let rule = lock(&state.store).data.rules.iter().find(|r| r.id == id).cloned().ok_or("找不到这条规则")?;
     let roots = rule_roots(state)?;
     let spec = rules::parse(&rule, &roots)?;
@@ -414,11 +428,13 @@ pub fn start_scheduler(app: AppHandle) {
         let state = app.state::<AppState>();
         let due: Vec<String> = {
             let st = lock(&state.store);
+            if st.data.settings.read_only { Vec::new() } else {
             let now = now_ms();
             st.data.rules.iter().filter(|r| r.on).filter(|r| {
                 let every = match r.sched.as_str() { "new" => 10 * 60_000, "day" => 86_400_000, "week" => 7 * 86_400_000, "month" => 30 * 86_400_000, _ => i64::MAX };
                 now - r.last_run >= every
             }).map(|r| r.id.clone()).collect()
+            }
         };
         for id in due {
             match execute_rule(&state, &id) {

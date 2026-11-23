@@ -100,6 +100,9 @@ pub fn matches(s: &Spec) -> Vec<(PathBuf, u64)> {
                 continue;
             }
             if !md.is_file() { continue; }
+            // online-only cloud files: moving needs a download, and recycling deletes the cloud copy too
+            #[cfg(windows)]
+            { use std::os::windows::fs::MetadataExt; if crate::winfs::is_cloud_attrs(md.file_attributes()) { continue; } }
             let name = e.file_name().to_string_lossy().to_lowercase();
             if name == "desktop.ini" { continue; }
             if !s.exts.is_empty() && !s.exts.iter().any(|x| name.ends_with(&format!(".{x}"))) { continue; }

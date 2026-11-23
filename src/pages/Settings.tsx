@@ -38,13 +38,13 @@ function Kv({ title, desc, htmlFor, children, top, mono }: { title: string; desc
 }
 
 export function Settings() {
-  const { theme, setTheme, pushToast } = useShell();
+  const { theme, setTheme, pushToast, refreshDrives } = useShell();
   const [sec, setSec] = useState('set-general');
   const [st, reload] = useData(() => diskService.getSettings());
   if (!st) return <PageHeader crumb={['设置']} />;
   const put = async (patch: Partial<SettingsData>) => {
     try { await diskService.saveSettings(patch); } catch (e) { pushToast({ kind: 'err', title: '设置没有保存', sub: String(e) }, 9000); }
-    await reload();
+    await reload(); await refreshDrives();
   };
   const sw: Record<SwKey, boolean> = { ...SWD, ...Object.fromEntries(Object.keys(SWD).map((k) => [k, st[k as SwKey]])), sound: sound.enabled() } as Record<SwKey, boolean>;
   const { close, bin, drives, excl } = st;
@@ -104,6 +104,9 @@ export function Settings() {
             </Kv>
           </section>
           <section id="set-safety" aria-labelledby="h-safety"><h2 id="h-safety">清理与安全</h2>
+            <Kv title="只读模式" desc="开启时只扫描，不移动、不删除任何文件；清理、迁移和自动规则都会被拒绝" htmlFor="st-readOnly">
+              <Toggle id="st-readOnly" on={st.readOnly} onChange={() => void put({ readOnly: !st.readOnly })} />
+            </Kv>
             <Kv title="不可恢复的操作要再确认一次" desc="清空回收站这类操作，总会先弹出确认，列出将被删除的内容"><span className="lock">始终开启</span></Kv>
             <Kv title="能放进回收站的，先放进回收站" desc="安装包、重复文件、大文件都先进回收站，30 天内可撤销" htmlFor="st-recycleFirst">{T('recycleFirst')}</Kv>
             <Kv title="清理前确认相关程序没有运行" desc="例如清理 Docker 镜像前会先确认 Docker Desktop 已退出" htmlFor="st-checkRunning">{T('checkRunning')}</Kv>

@@ -137,6 +137,9 @@ fn hash_file(p: &Path) -> std::io::Result<[u8; 32]> {
 
 /// Copy one file and prove the copy: hash while reading the source, fsync, re-read the copy.
 fn copy_verified(src: &Path, dst: &Path, cancel: &AtomicBool, mut on_bytes: impl FnMut(u64)) -> Result<String, String> {
+    if crate::winfs::is_cloud(src) {
+        return Err(format!("{} 只在云端，没有复制（避免触发下载）", src.display()));
+    }
     let part = dst.with_file_name(format!("{}.part", dst.file_name().unwrap().to_string_lossy()));
     let mut r = File::open(src).map_err(|e| format!("读不了 {}：{e}", src.display()))?;
     let len = r.metadata().map(|m| m.len()).unwrap_or(0);
@@ -212,6 +215,9 @@ pub fn preflight(job: &Job, target: &Roots, app_data: &Path, probes: &Probes) ->
             return Err(format!("{} 里有链接或联接，暂不支持自动迁移", e.path().display()));
         }
         if e.file_type.is_file() {
+            if crate::winfs::is_cloud(&e.path()) {
+                return Err(format!("{} 只在云端（OneDrive 等的在线文件），复制会触发下载，暂不支持迁移这个文件夹", e.path().display()));
+            }
             total += e.metadata().map(|m| m.len()).unwrap_or(0);
         }
     }

@@ -14,31 +14,29 @@ pub mod sandbox;
 pub mod scan;
 pub mod store;
 pub mod timefmt;
+pub mod winfs;
 #[cfg(test)]
 mod testutil;
 
 mod actions;
 mod commands;
 
-use std::collections::HashSet;
 use std::sync::atomic::AtomicBool;
 use std::sync::{Arc, Mutex};
 use store::Store;
 
 pub struct AppState {
     pub store: Mutex<Store>,
-    /// last scan (map model, suggestions, file index)
-    pub scan: Mutex<Option<commands::Scanned>>,
+    /// scans per drive / sandbox (map model, suggestions, file index)
+    pub scan: Mutex<commands::ScanCache>,
     pub cancel: Arc<AtomicBool>,
-    /// map blocks cleaned since the last scan
-    pub cleaned: Mutex<HashSet<String>>,
     /// the migration in progress, if any
     pub migration: Mutex<Option<actions::Migration>>,
 }
 
 impl AppState {
     pub fn new(store: Store) -> Self {
-        AppState { store: Mutex::new(store), scan: Mutex::new(None), cancel: Arc::new(AtomicBool::new(false)), cleaned: Mutex::new(HashSet::new()), migration: Mutex::new(None) }
+        AppState { store: Mutex::new(store), scan: Mutex::new(commands::ScanCache::default()), cancel: Arc::new(AtomicBool::new(false)), migration: Mutex::new(None) }
     }
 }
 

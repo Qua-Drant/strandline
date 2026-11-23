@@ -8,6 +8,7 @@ import { navigate } from '../router';
 import { NAV, PATHS } from '../routes';
 import { AppPortal } from './parts';
 import { useShell } from './context';
+import { diskService } from '../services/diskService';
 import type { DriveInfo } from '../services/types';
 
 function driveView(d: DriveInfo) {
@@ -28,7 +29,7 @@ const DISK_VIEWS: [string, string, 'map' | 'suggest' | 'large' | 'dupes'][] = [
 ];
 
 function Sidebar({ path }: { path: string }) {
-  const { drives, writing, sbDisk, setSbDisk, task, setPal, suggestN, scanAt } = useShell();
+  const { drives, writing, sbDisk, setSbDisk, task, setPal, suggestN, scanAt, readOnly, sys } = useShell();
   const views = drives.map(driveView);
   const hi = views.filter((v) => v.lv === 'hi').length, mid = views.filter((v) => v.lv === 'mid').length;
   const sum = views.length + ' 块磁盘 · ' + (hi ? hi + ' 块空间紧张' : mid ? mid + ' 块空间偏紧' : '空间都充足');
@@ -67,7 +68,7 @@ function Sidebar({ path }: { path: string }) {
                   {DISK_VIEWS.map(([label, to, icon]) => (
                     <Link key={to} className="nav-item" to={to} current={cur && path === to}>
                       <Icon name={icon} size={15} /><span>{label}</span>
-                      {icon === 'suggest' && <span className="count mono">{suggestCount}</span>}
+                      {icon === 'suggest' && d.id === sys.id && <span className="count mono">{suggestCount}</span>}
                     </Link>
                   ))}
                 </div>
@@ -91,7 +92,7 @@ function Sidebar({ path }: { path: string }) {
       </div></div>
       <div className="sb-foot">
         <Link className="nav-item" to={PATHS.settings} current={path === PATHS.settings}><Icon name="settings" size={16} /><span>设置</span></Link>
-        <span className="sb-scan mono" title="上次扫描">{task?.scan ? '正在扫描…' : scanAt + ' 已扫描'}</span>
+        <span className="sb-scan mono" title="上次扫描">{(readOnly ? '只读 · ' : '') + (task?.scan ? '正在扫描…' : scanAt + ' 已扫描')}</span>
       </div>
     </nav>
   );
@@ -170,6 +171,37 @@ export function Toasts({ bottom = '4.5rem' }: { bottom?: string }) {
   );
 }
 
+/** First desktop launch: say plainly what is read and what may be written, and let the user choose. */
+function SafetyNotice() {
+  const { ackSafety, refreshDrives } = useShell();
+  const [busy, setBusy] = useState(false);
+  if (ackSafety || diskService.mode === 'mock') return null;
+  const choose = async (readOnly: boolean) => {
+    setBusy(true);
+    await diskService.saveSettings({ readOnly, ackSafety: true });
+    await refreshDrives();
+  };
+  return (
+    <AppPortal>
+      <div className="modal">
+        <section className="dlg" role="dialog" aria-modal="true" aria-labelledby="safety-t">
+          <h2 id="safety-t" style={{ margin: 0, fontSize: '1rem', fontWeight: 600 }}>Strandline 怎样对待你的文件</h2>
+          <ul style={{ margin: 0, paddingInlineStart: '1.1rem', display: 'grid', gap: '0.5rem', lineHeight: 1.55 }}>
+            <li><b>扫描只读。</b>只读取文件夹结构、名称、大小和时间，不读文件内容；不跟随链接，跳过没有权限的文件夹，不会触发 OneDrive 等云端文件下载。</li>
+            <li><b>清理默认只移入回收站。</b>Windows 系统目录、程序目录和用户根文件夹一律受保护；回收站放不下的项目会被拒绝，而不是直接删除。唯一的不可逆操作是「清空回收站」，会再确认一次。</li>
+            <li><b>迁移先复制并逐个文件校验</b>，确认无误后才在原处建立链接，旧文件夹进回收站。</li>
+          </ul>
+          <p className="muted small" style={{ margin: 0 }}>可以先用只读模式看看扫描结果，之后随时在 设置 › 清理与安全 里改。</p>
+          <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '0.5rem' }}>
+            <button type="button" className="btn" disabled={busy} onClick={() => void choose(false)}>允许清理（只进回收站）</button>
+            <button type="button" className="btn btn-primary" autoFocus disabled={busy} onClick={() => void choose(true)}>先只读看看</button>
+          </div>
+        </section>
+      </div>
+    </AppPortal>
+  );
+}
+
 /** Window frame: title bar, sidebar, page area. Pages render their header + content as children. */
 /** `palette` replaces the default page palette (the space map has its own, with commands). */
 export function Shell({ path, children, commands, palette }: { path: string; children: ReactNode; commands?: PaletteCommand[]; palette?: ReactNode }) {
@@ -212,6 +244,7 @@ export function Shell({ path, children, commands, palette }: { path: string; chi
         </main>
       </div>
       {pal && (palette ?? <Palette commands={commands} />)}
+      <SafetyNotice />
     </div>
   );
 }

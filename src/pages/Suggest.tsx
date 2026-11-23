@@ -15,7 +15,8 @@ import { useEscape, useShell } from '../shell/context';
 type Filter = 'all' | Level;
 
 export function Suggest() {
-  const { cFree: cf, sys, refreshDrives, pushToast } = useShell();
+  const { cur: sys, refreshDrives, pushToast } = useShell();
+  const cf = sys.free;
   const total = sys.total;
   const [rows, reload] = useData(() => diskService.getSuggestions(sys.id), sys.id);
   const ROWS: CleanRow[] = rows ?? [];

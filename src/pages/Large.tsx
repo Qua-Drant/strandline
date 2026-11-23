@@ -34,7 +34,7 @@ const Lock = () => (
 );
 
 export function Large() {
-  const { pushToast, refreshDrives, sys } = useShell();
+  const { pushToast, refreshDrives, cur: sys } = useShell();
   const [type, setType] = useState<FType | 'all'>('all');
   const [th, setTh] = useState(1);
   const [checked, setChecked] = useState<Record<string, boolean>>({});

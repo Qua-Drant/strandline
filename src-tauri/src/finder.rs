@@ -17,6 +17,12 @@ use std::path::{Path, PathBuf};
 
 pub const LARGE_MIN: u64 = 1024 * 1024 * 1024;
 pub const DUP_MIN: u64 = 1024 * 1024;
+/// Most groups / copies / large files sent to the UI at once (the rest stay summarised).
+pub const MAX_GROUPS: usize = 200;
+pub const MAX_COPIES: usize = 20;
+/// total copies across all groups sent to the UI (keeps the payload around a few hundred KB)
+pub const MAX_TOTAL_COPIES: usize = 2000;
+pub const MAX_LARGE: usize = 200;
 const EDGE: u64 = 64 * 1024;
 const GB: f64 = 1024.0 * 1024.0 * 1024.0;
 
@@ -40,8 +46,9 @@ fn ftype(p: &Path) -> &'static str {
 
 /// Large files (≥ 1 GiB). Returns the rows plus id → path for later actions.
 pub fn large(files: &[FileRec], roots: &Roots) -> (Vec<BigFile>, HashMap<String, PathBuf>) {
-    let mut v: Vec<&FileRec> = files.iter().filter(|f| f.size >= LARGE_MIN).collect();
+    let mut v: Vec<&FileRec> = files.iter().filter(|f| f.size >= LARGE_MIN && !crate::winfs::is_cloud(&f.path)).collect();
     v.sort_by_key(|f| std::cmp::Reverse(f.size));
+    v.truncate(MAX_LARGE);
     let mut ids = HashMap::new();
     let rows = v.into_iter().enumerate().map(|(i, f)| {
         let id = format!("f{i}");
@@ -85,6 +92,7 @@ fn dup_excluded(p: &Path, r: &Roots) -> bool {
 }
 
 fn edge_hash(p: &Path, size: u64) -> Option<[u8; 32]> {
+    if crate::winfs::is_cloud(p) { return None; } // reading would download it
     let mut f = File::open(p).ok()?;
     let mut h = blake3::Hasher::new();
     h.update(&size.to_le_bytes());
@@ -100,6 +108,7 @@ fn edge_hash(p: &Path, size: u64) -> Option<[u8; 32]> {
 }
 
 pub fn full_hash(p: &Path) -> Option<[u8; 32]> {
+    if crate::winfs::is_cloud(p) { return None; }
     let mut f = File::open(p).ok()?;
     let mut h = blake3::Hasher::new();
     let mut buf = vec![0u8; 1 << 20];
@@ -130,9 +139,19 @@ pub fn duplicates(files: &[FileRec], roots: &Roots) -> (Vec<DupGroup>, HashMap<S
 
     let mut groups: Vec<Vec<&FileRec>> = by_full.into_values().filter(|v| v.len() > 1).collect();
     groups.sort_by(|a, b| (b[0].size * (b.len() as u64 - 1)).cmp(&(a[0].size * (a.len() as u64 - 1))));
+    groups.truncate(MAX_GROUPS);
+    // most wasted space first, until the copy budget is spent
+    let mut budget = MAX_TOTAL_COPIES;
+    groups.retain(|g| {
+        let n = g.len().min(MAX_COPIES);
+        if n > budget { return false; }
+        budget -= n;
+        true
+    });
     let mut ids = HashMap::new();
     let out = groups.into_iter().enumerate().map(|(i, mut g)| {
         g.sort_by_key(|f| f.mtime);
+        g.truncate(MAX_COPIES);
         let id = format!("g{i}");
         ids.insert(id.clone(), g.iter().map(|f| f.path.clone()).collect());
         DupGroup {

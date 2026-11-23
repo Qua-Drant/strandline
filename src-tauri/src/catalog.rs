@@ -2,7 +2,7 @@
 //! suggestions, and migration plans. Known locations are recognised from local metadata only
 //! (paths, names, sizes and times) — file contents are never read here.
 
-use crate::model::{Cat, CleanRow, DriveInfo, Leaf, MapModel, Move};
+use crate::model::{Cat, CleanRow, DriveInfo, Leaf, MapModel, Move, ScanStats};
 use crate::paths::{display, head_tail, is_within};
 use crate::sandbox::Roots;
 use crate::scan::ScanResult;
@@ -167,6 +167,23 @@ fn specs(r: &Roots, scan: &ScanResult) -> Vec<Spec> {
     for (i, (p, _)) in extra.into_iter().take(4).enumerate() {
         let name = p.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_default();
         v.push(spec(IDS[i], "user", &name, &name, "L4", "keep", vec![p], How::Keep, "你自己的文件夹，适合整体迁移到其他盘。").mv(MVS[i]));
+    }
+
+    // a data drive (not the one holding the user profile): its biggest top-level folders are the map
+    if !r.sandbox && !crate::paths::is_within(&r.user, &r.drive) {
+        let skip = ["$recycle.bin", "system volume information", "recovery", "config.msi", "$winreagent"];
+        let mut tops: Vec<(PathBuf, u64)> = std::fs::read_dir(&r.drive).into_iter().flatten().flatten()
+            .filter(|e| e.file_type().map(|t| t.is_dir()).unwrap_or(false))
+            .filter(|e| !skip.contains(&e.file_name().to_string_lossy().to_lowercase().as_str()))
+            .map(|e| { let p = e.path(); let sz = scan.size_of(&p); (p, sz) })
+            .filter(|(_, sz)| *sz as f64 / GB >= 0.2)
+            .collect();
+        tops.sort_by_key(|t| std::cmp::Reverse(t.1));
+        const TOP: [&str; 12] = ["top1", "top2", "top3", "top4", "top5", "top6", "top7", "top8", "top9", "top10", "top11", "top12"];
+        for (i, (p, _)) in tops.into_iter().take(TOP.len()).enumerate() {
+            let name = p.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_default();
+            v.push(spec(TOP[i], "user", &name, &name, "L4", "keep", vec![p], How::Keep, "这块盘上的文件夹。"));
+        }
     }
     v
 }
@@ -336,7 +353,8 @@ pub fn build(scan: &ScanResult, drive: &DriveInfo, drives: &[DriveInfo], cleaned
         moves.push(move_plan(&l.move_id, &l.name, cells, &src, to, gb));
     }
 
-    let model = MapModel { drive: drive.clone(), leaves, cats, moves, bin: bin_gb, history30, scanned_at };
+    let stats = ScanStats { files: scan.nfiles, skipped: scan.skipped, cloud_files: scan.cloud_files, cloud_gb: scan.cloud_bytes as f64 / GB, hardlinks: scan.hardlinks, took_sec: scan.took.as_secs_f64() };
+    let model = MapModel { drive: drive.clone(), leaves, cats, moves, bin: bin_gb, history30, scanned_at, stats: Some(stats) };
     Built { model, rows, plans, foam }
 }
 

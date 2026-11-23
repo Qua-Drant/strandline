@@ -2,7 +2,7 @@
 // Used in a plain browser (npm run dev, GitHub Pages). Nothing here touches the real disk.
 import type { DiskService } from '../diskService';
 import type {
-  ActivityEvent, BigFile, CleanRow, DriveInfo, DupGroup, DupSelection, History90, Leaf, MapModel, MigrateOptions,
+  ActivityEvent, BigFile, Cat, CleanRow, DriveInfo, DupGroup, DupSelection, History90, Leaf, MapModel, MigrateOptions,
   MigrationProgress, OverviewData, Receipt, Rule, RuleRun, RuleTemplate, ScanProgress, Settings,
 } from '../types';
 import { CLEANS, C_FREE_0, HIST30, LEVEL90, MOVES90, RULEDAYS } from './data/history';
@@ -17,6 +17,23 @@ const DRIVE_META: Record<string, { name: string; total: number; free30: number }
   C: { name: '系统盘', total: 512, free30: 87.2 }, D: { name: '数据盘', total: 1000, free30: 401.5 }, E: { name: '移动硬盘', total: 965, free30: 637.0 },
 };
 const FOAM_IDS = ['temp', 'browser', 'pip', 'npm', 'nvidia', 'delivery'];
+
+/** Demo data drives: a few kept folders, nothing to clean. */
+const keepLeaf = (id: string, cat: string, catName: string, name: string, gb: number, head: string): Leaf => ({
+  id, cat, catName, name, short: name, xs: '', gb, gain: gb, level: 'L4', act: 'keep', pathHead: head, pathTail: name,
+  note: '', cmd: '', meta: false, move: '', rv: 50, actual: gb,
+});
+const OTHER: Record<string, { leaves: Leaf[]; cats: Cat[] }> = {
+  D: {
+    leaves: [keepLeaf('d_ds', 'user', '个人数据', 'Datasets', 318.4, 'D:\\'), keepLeaf('d_wx', 'user', '个人数据', 'WeChat Files', 96.2, 'D:\\'),
+      keepLeaf('d_zot', 'user', '个人数据', 'Zotero', 6.4, 'D:\\'), keepLeaf('d_vid', 'docs', '文稿与照片', '视频', 121.0, 'D:\\'), keepLeaf('d_bak', 'docs', '文稿与照片', 'Backups', 70.0, 'D:\\')],
+    cats: [{ id: 'user', name: '个人数据', short: '个人数据', items: ['d_ds', 'd_wx', 'd_zot'], cl: '其他' }, { id: 'docs', name: '文稿与照片', short: '文稿与照片', items: ['d_vid', 'd_bak'], cl: '其他' }],
+  },
+  E: {
+    leaves: [keepLeaf('e_photo', 'docs', '文稿与照片', '照片备份', 248.0, 'E:\\'), keepLeaf('e_raw', 'user', '个人数据', '原始影像', 80.0, 'E:\\')],
+    cats: [{ id: 'docs', name: '文稿与照片', short: '文稿与照片', items: ['e_photo'], cl: '其他' }, { id: 'user', name: '个人数据', short: '个人数据', items: ['e_raw'], cl: '其他' }],
+  },
+};
 
 interface Undo { receipt: Receipt; revert: Record<string, () => void>; revertAll?: () => void }
 
@@ -43,7 +60,7 @@ export class MockDiskService implements DiskService {
   private migListeners = new Set<(p: MigrationProgress) => void>();
   private settings: Settings = {
     autostart: true, sound: false, daily: true, recycleFirst: true, checkRunning: true, skipInUse: true, low: true, weekly: false, inst: true,
-    close: 'tray', bin: '30', drives: { C: true, D: true, E: false }, excl: ['%USERPROFILE%\\Projects\\active', 'D:\\Backups'], scanRoot: '',
+    close: 'tray', bin: '30', drives: { C: true, D: true, E: false }, excl: ['%USERPROFILE%\\Projects\\active', 'D:\\Backups'], scanRoot: '', readOnly: false, ackSafety: true,
   };
 
   private leaf(id: string) { return this.leaves.find((l) => l.id === id)!; }
@@ -59,6 +76,11 @@ export class MockDiskService implements DiskService {
   async listDrives() { return ['C', 'D', 'E'].map((d) => this.drive(d)); }
 
   async getMapModel(drive: string): Promise<MapModel> {
+    const other = OTHER[drive];
+    if (other) {
+      const d = this.drive(drive);
+      return { drive: d, leaves: clone(other.leaves), cats: clone(other.cats), moves: [], bin: 0, history30: new Array(29).fill(d.free30), scannedAt: this.scannedAt };
+    }
     const leaves = this.leaves.map((l) => ({ ...l, gb: l.id === 'recycle' ? this.bin : l.gb }));
     return { drive: this.drive(drive), leaves, cats: clone(CATS), moves: clone(MOVES).filter((m) => !this.moved[m.id]), bin: this.bin, history30: HIST30.slice(), scannedAt: this.scannedAt };
   }
@@ -79,7 +101,8 @@ export class MockDiskService implements DiskService {
   async cancelScan() { this.scanDone?.(); }
 
   // ---------- cleaning
-  async getSuggestions(): Promise<CleanRow[]> {
+  async getSuggestions(drive = 'C'): Promise<CleanRow[]> {
+    if (drive !== 'C') return [];
     return ROWS.map((r) => ({ ...r, done: !!this.leaves.find((l) => l.id === r.id)?.cleaned }));
   }
 
@@ -126,7 +149,7 @@ export class MockDiskService implements DiskService {
   }
 
   // ---------- large files & duplicates
-  async findLarge(): Promise<BigFile[]> { return clone(FILES).filter((f) => !this.goneFiles[f.id]); }
+  async findLarge(drive = 'C'): Promise<BigFile[]> { if (drive !== 'C') return []; return clone(FILES).filter((f) => !this.goneFiles[f.id]); }
   async recycleFiles(ids: string[]): Promise<Receipt> {
     const rc = this.newReceipt();
     for (const id of ids) {
@@ -139,7 +162,7 @@ export class MockDiskService implements DiskService {
     this.undos[rc.id] = { receipt: rc, revert: {}, revertAll: () => { rc.items.forEach((i) => { delete this.goneFiles[i.id]; }); this.bin -= rc.bin; } };
     return rc;
   }
-  async findDuplicates(): Promise<DupGroup[]> { return this.dupesDone ? [] : clone(GROUPS); }
+  async findDuplicates(drive = 'C'): Promise<DupGroup[]> { if (drive !== 'C') return []; return this.dupesDone ? [] : clone(GROUPS); }
   async recycleDuplicates(sel: DupSelection[]): Promise<Receipt> {
     const rc = this.newReceipt();
     for (const s of sel) {

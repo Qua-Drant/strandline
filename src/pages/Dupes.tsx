@@ -30,7 +30,7 @@ type Rule = 'docs' | 'old' | 'new';
 const RULE_NOTE: Record<Rule, string> = { docs: '优先留下「文稿」和数据集里的那份', old: '留下最早出现的那份，后来的复制和转存算副本', new: '留下最新的那份，早先的算副本' };
 
 export function Dupes() {
-  const { pushToast, refreshDrives, sys } = useShell();
+  const { pushToast, refreshDrives, cur: sys } = useShell();
   const [rule, setRule] = useState<Rule>('docs');
   const [keep, setKeep] = useState<Record<string, number>>({});
   const [receipt, setReceipt] = useState<Receipt | null>(null);

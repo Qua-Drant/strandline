@@ -29,6 +29,39 @@ pub struct Scanned {
     pub scan_root: String,
     pub large_ids: HashMap<String, PathBuf>,
     pub dupes: Option<Dupes>,
+    /// map blocks cleaned since this scan
+    pub cleaned: HashSet<String>,
+}
+
+/// One scan per target (C:, D:, a sandbox…); the one in use is "active".
+#[derive(Default)]
+pub struct ScanCache {
+    map: HashMap<String, Scanned>,
+    active: Option<String>,
+}
+
+impl ScanCache {
+    pub fn as_ref(&self) -> Option<&Scanned> {
+        self.active.as_ref().and_then(|k| self.map.get(k))
+    }
+    pub fn as_mut(&mut self) -> Option<&mut Scanned> {
+        let k = self.active.clone()?;
+        self.map.get_mut(&k)
+    }
+    pub fn insert(&mut self, s: Scanned) {
+        let k = scan_key(&s.drive, &s.scan_root);
+        self.active = Some(k.clone());
+        self.map.insert(k, s);
+    }
+    /// Make the scan for `key` active; false when that target was never scanned.
+    pub fn activate(&mut self, key: &str) -> bool {
+        if self.map.contains_key(key) {
+            self.active = Some(key.to_string());
+            true
+        } else {
+            false
+        }
+    }
 }
 
 pub fn lock<T>(m: &std::sync::Mutex<T>) -> std::sync::MutexGuard<'_, T> {
@@ -64,7 +97,7 @@ fn history30(state: &AppState, drive: &DriveInfo) -> Vec<f64> {
 
 pub fn rebuild(state: &AppState, sc: &mut Scanned) -> CmdResult<()> {
     let (d, all) = drive_info(state, &sc.drive)?;
-    let cleaned = lock(&state.cleaned).clone();
+    let cleaned = sc.cleaned.clone();
     let h = history30(state, &d);
     let at = sc.built.model.scanned_at.clone();
     sc.built = catalog::build(&sc.result, &d, &all, &cleaned, h, at);
@@ -87,7 +120,6 @@ fn do_scan(app: &AppHandle, drive: &str) -> CmdResult<()> {
     }).ok_or("已停止扫描")?;
     let _ = app.emit("scan-progress", ScanProgress { p: 98.0, phase: "classify", files: res.nfiles, gb: res.total as f64 / catalog::GB });
 
-    lock(&state.cleaned).clear();
     let h = history30(&state, &d);
     let built = catalog::build(&res, &d, &all, &HashSet::new(), h, hhmm(now_ms()));
     let (_, large_ids) = finder::large(&res.files, &res.roots);
@@ -97,12 +129,17 @@ fn do_scan(app: &AppHandle, drive: &str) -> CmdResult<()> {
         st.log(ActivityEvent {
             id: String::new(), day: String::new(), time: String::new(), kind: "scan".into(),
             title: if scan_root.is_empty() { format!("扫描 {letter}:") } else { "扫描沙盒".into() },
-            detail: format!("{} · {} 秒", if res.nfiles >= 10_000 { format!("{:.1} 万个文件", res.nfiles as f64 / 10_000.0) } else { format!("{} 个文件", res.nfiles) }, res.took.as_secs().max(1)),
+            detail: {
+                let mut d = format!("{} · {} 秒", if res.nfiles >= 10_000 { format!("{:.1} 万个文件", res.nfiles as f64 / 10_000.0) } else { format!("{} 个文件", res.nfiles) }, res.took.as_secs().max(1));
+                if res.skipped > 0 { d += &format!(" · 跳过 {} 个无权限或被占用的项", res.skipped); }
+                if res.cloud_files > 0 { d += &format!(" · {} 个仅在云端的文件未计入", res.cloud_files); }
+                d
+            },
             amount: format!("{:.0} GB", res.total as f64 / catalog::GB), undo: String::new(), items: vec![], undone: false, at: 0, receipt: None,
         });
         st.save();
     }
-    *lock(&state.scan) = Some(Scanned { result: res, built, drive: letter, scan_root, large_ids, dupes: None });
+    lock(&state.scan).insert(Scanned { result: res, built, drive: letter, scan_root, large_ids, dupes: None, cleaned: HashSet::new() });
     let _ = app.emit("scan-progress", ScanProgress { p: 100.0, phase: "classify", files: 0, gb: 0.0 });
     Ok(())
 }
@@ -114,7 +151,7 @@ pub fn scan_key(letter: &str, scan_root: &str) -> String {
 /// Is the cached scan still for the current target?
 pub fn current(state: &AppState, drive: &str) -> bool {
     let Ok((_, _, letter, root)) = target(state, drive) else { return false };
-    lock(&state.scan).as_ref().map(|s| s.drive == letter && s.scan_root == root).unwrap_or(false)
+    lock(&state.scan).activate(&scan_key(&letter, &root))
 }
 
 pub async fn blocking<T: Send + 'static>(f: impl FnOnce() -> CmdResult<T> + Send + 'static) -> CmdResult<T> {
@@ -146,7 +183,7 @@ pub fn get_map_model(state: State<AppState>, drive: String) -> CmdResult<MapMode
     // no scan yet for this target: an empty model tells the UI to scan
     let (_, _, letter, _) = target(&state, &drive)?;
     let (d, _) = drive_info(&state, &letter)?;
-    Ok(MapModel { drive: d, leaves: vec![], cats: vec![], moves: vec![], bin: 0.0, history30: vec![], scanned_at: String::new() })
+    Ok(MapModel { drive: d, leaves: vec![], cats: vec![], moves: vec![], bin: 0.0, history30: vec![], scanned_at: String::new(), stats: None })
 }
 
 #[tauri::command]
@@ -321,7 +358,8 @@ pub fn save_rule(state: State<AppState>, rule: Rule) -> CmdResult<()> {
 #[tauri::command]
 pub fn list_activity(state: State<AppState>) -> CmdResult<Vec<ActivityEvent>> {
     let st = lock(&state.store);
-    Ok(st.data.activity.iter().map(|e| ActivityEvent { day: day_label(e.at), time: hhmm(e.at), ..e.clone() }).collect())
+    // newest 500 entries is plenty for the page; the log itself keeps 90 days
+    Ok(st.data.activity.iter().take(500).map(|e| ActivityEvent { day: day_label(e.at), time: hhmm(e.at), ..e.clone() }).collect())
 }
 
 #[tauri::command]

@@ -76,7 +76,7 @@ function useMergeState<T extends object>(init: T) {
 
 export function MapPage() {
   const shell = useShell();
-  const { cFree: sysFree, sys, drives, refreshDrives, pushToast, setPal, pal, setTask, setWriting, setSuggestN, setScanAt, appEl } = shell;
+  const { cur: sys, drives, refreshDrives, pushToast, setPal, pal, setTask, setWriting, setSuggestN, setScanAt, appEl } = shell;
   const [s, set, sref] = useMergeState(INIT);
   const ebbT = useRef<number[]>([]);
   const mapEl = useRef<HTMLElement | null>(null);
@@ -91,7 +91,7 @@ export function MapPage() {
   const LEAF: Record<string, Leaf> = Object.fromEntries(LEAVES.map((l) => [l.id, l]));
   const TOTAL = model.drive.total, FREE30 = model.drive.free30, HIST30 = model.history30;
   // the scanned drive may not be the system drive (e.g. a sandbox folder on D:)
-  const freeNow = s.model && model.drive.id !== sys.id ? (drives.find((d) => d.id === model.drive.id)?.free ?? model.drive.free) : sysFree;
+  const freeNow = s.model ? (drives.find((d) => d.id === model.drive.id)?.free ?? model.drive.free) : sys.free;
   const FREE0 = s.free0 ?? freeNow;
   const moveOf = (id: string | null) => MOVES.find((m) => m.id === id);
   const reloadModel = async () => {
@@ -151,7 +151,8 @@ export function MapPage() {
       await refreshDrives();
       const v = m.leaves.filter((l) => ['L1', 'L2', 'L3'].includes(l.level) && !l.cleaned && l.gb > 0.05).reduce((a, l) => a + (l.level === 'L2' ? Math.min(l.gain, l.gb) : l.gb), 0);
       const mv = m.moves.reduce((a, mm) => a + mm.cells.reduce((x, c) => x + (m.leaves.find((l) => l.id === c)?.gb ?? 0), 0), 0);
-      pushToast({ kind: 'ok', title: '扫描完成', sub: '可清理约 ' + v.toFixed(1) + ' GB · 可迁移 ' + mv.toFixed(1) + ' GB' }, 5000);
+      const st = m.stats, extra = st ? [st.skipped ? '跳过 ' + st.skipped + ' 个无权限项' : '', st.cloudFiles ? st.cloudFiles + ' 个云端文件未计入' : ''].filter(Boolean).join(' · ') : '';
+      pushToast({ kind: 'ok', title: '扫描完成', sub: '可清理约 ' + v.toFixed(1) + ' GB · 可迁移 ' + mv.toFixed(1) + ' GB' + (extra ? ' · ' + extra : '') }, 7000);
     } catch (e) {
       set({ phase: 'results', p: 100 });
       pushToast({ kind: 'err', title: '扫描没有完成', sub: String(e) }, 8000);

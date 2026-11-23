@@ -12,9 +12,15 @@ export interface ShellState {
   drives: DriveInfo[];
   /** the system drive (C:) */
   sys: DriveInfo;
+  /** the drive picked in the sidebar: the map, suggestions, large files and duplicates show this one */
+  cur: DriveInfo;
+  /** desktop: scan only, every write is refused */
+  readOnly: boolean;
+  /** the first-run safety notice has been answered */
+  ackSafety: boolean;
   /** free GB on the system drive — shared so a clean on any page shows in the sidebar and overview */
   cFree: number;
-  /** re-read drive sizes from the service after an action */
+  /** re-read drive sizes (and the safety settings) from the service after an action */
   refreshDrives: () => Promise<void>;
   /** overview's one-tap cache clean: 0 idle, 1 running, 2 done */
   foam: 0 | 1 | 2;

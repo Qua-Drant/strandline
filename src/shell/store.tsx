@@ -13,7 +13,8 @@ async function readDrives() {
   const ds = await diskService.listDrives();
   const sys = ds.find((d) => d.id === 'C') ?? ds[0];
   const n = sys ? (await diskService.getSuggestions(sys.id)).filter((r) => !r.done).length : 0;
-  return { ds, n };
+  const st = await diskService.getSettings();
+  return { ds, n, readOnly: st.readOnly, ackSafety: st.ackSafety };
 }
 
 type Boot = Awaited<ReturnType<typeof readDrives>>;
@@ -39,6 +40,7 @@ function ShellCore({ boot, children }: { boot: Boot; children: ReactNode }) {
   const [task, setTask] = useState<Task | null>(null);
   const [pal, setPal] = useState(false);
   const [suggestN, setSuggestN] = useState<number | null>(boot.n);
+  const [safety, setSafety] = useState({ readOnly: boot.readOnly, ackSafety: boot.ackSafety });
   const [scanAt, setScanAt] = useState('13:52');
   const [appEl, setAppEl] = useState<HTMLDivElement | null>(null);
   const tid = useRef(1);
@@ -78,17 +80,18 @@ function ShellCore({ boot, children }: { boot: Boot; children: ReactNode }) {
   }, []);
   const runEscape = useCallback(() => escape.current?.(), []);
 
-  const refreshDrives = useCallback(() => readDrives().then(({ ds, n }) => { setDrives(ds); setSuggestN(n); }), []);
+  const refreshDrives = useCallback(() => readDrives().then(({ ds, n, readOnly, ackSafety }) => { setDrives(ds); setSuggestN(n); setSafety({ readOnly, ackSafety }); }), []);
 
   useEffect(() => () => { if (taskTimer.current) window.clearInterval(taskTimer.current); }, []);
 
   const value = useMemo<ShellState>(() => {
     const sys = drives.find((d) => d.id === 'C') ?? drives[0];
+    const cur = drives.find((d) => d.id === sbDisk) ?? sys;
     return {
-    drives, sys, cFree: sys.free, refreshDrives, foam, setFoam, writing, setWriting, theme, setTheme, sbDisk, setSbDisk,
+    drives, sys, cur, readOnly: safety.readOnly, ackSafety: safety.ackSafety, cFree: sys.free, refreshDrives, foam, setFoam, writing, setWriting, theme, setTheme, sbDisk, setSbDisk,
     toasts, pushToast, dropToast, task, startTask, setTask, pal, setPal, suggestN, setSuggestN, scanAt, setScanAt,
     registerEscape, runEscape, appEl, setAppEl,
-  }; }, [drives, refreshDrives, foam, writing, theme, setTheme, sbDisk, toasts, pushToast, dropToast, task, startTask, pal, suggestN, scanAt, registerEscape, runEscape, appEl]);
+  }; }, [drives, safety, refreshDrives, foam, writing, theme, setTheme, sbDisk, toasts, pushToast, dropToast, task, startTask, pal, suggestN, scanAt, registerEscape, runEscape, appEl]);
 
   return <ShellContext.Provider value={value}>{children}</ShellContext.Provider>;
 }
