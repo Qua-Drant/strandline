@@ -217,7 +217,9 @@ pub fn preflight(job: &Job, target: &Roots, app_data: &Path, probes: &Probes) ->
     }
     let journal: Journal = fs::read(journal_path(dst)).ok().and_then(|b| serde_json::from_slice(&b).ok()).unwrap_or_default();
     let already: u64 = journal.done.values().map(|v| v.0).sum();
-    if dst.exists() && fs::read_dir(dst).map(|mut d| d.next().is_some()).unwrap_or(false) && journal.done.is_empty() {
+    // a journal for this same source means an interrupted run we can resume
+    let resumable = journal_path(dst).exists() && Path::new(&journal.src) == src.as_path();
+    if dst.exists() && fs::read_dir(dst).map(|mut d| d.next().is_some()).unwrap_or(false) && !resumable {
         return Err(format!("{} 已经存在且不是空文件夹", dst.display()));
     }
     let need = total.saturating_sub(already) + total / 100 + (256 << 20);
@@ -237,6 +239,8 @@ pub fn run(job: &Job, target: &Roots, app_data: &Path, ctl: &Control, probes: &P
     journal.src = src.to_string_lossy().to_string();
     journal.dst = dst.to_string_lossy().to_string();
     fs::create_dir_all(dst).map_err(|e| format!("建不了目标文件夹：{e}"))?;
+    // write the journal before anything else lands in the target, so any interruption is resumable
+    let _ = fs::write(&jpath, serde_json::to_vec(&journal).unwrap_or_default());
 
     let wait_if_running = |pct: f64, emit: &mut dyn FnMut(Event)| -> Result<(), String> {
         let mut announced = false;
