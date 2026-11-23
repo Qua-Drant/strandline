@@ -1,7 +1,5 @@
-import type { Level } from '../lib/util';
-
-export type CleanAct = 'rebuild' | 'recycle' | 'empty' | 'setting';
-export interface CleanRow { id: string; name: string; level: Level; act: CleanAct; gain: number; head: string; tail: string; note: string; cmd: string; meta: boolean; last: string; days: number }
+// Demo cleaning suggestions for C: (from the R19 design). Ids match the space-map leaves.
+import type { CleanRow } from '../../types';
 
 export const ROWS: CleanRow[] = [
   { id: 'hiber', name: '休眠文件', level: 'L2', act: 'setting', gain: 12.8, head: 'C:\\', tail: 'hiberfil.sys', note: '关掉休眠会同时关掉快速启动，开机会慢几秒；随时可以还原。', cmd: 'powercfg /h off', meta: true, last: '—', days: 999 },
@@ -19,9 +17,3 @@ export const ROWS: CleanRow[] = [
   { id: 'recycle', name: '回收站', level: 'L3', act: 'empty', gain: 9.6, head: 'C:\\', tail: '$Recycle.Bin', note: '已经删掉、还没清空的文件。清空后无法找回。', cmd: 'Clear-RecycleBin -DriveLetter C', meta: false, last: '—', days: 999 },
   { id: 'winupd', name: 'Windows 更新残留', level: 'L1', act: 'rebuild', gain: 5.4, head: 'C:\\Windows\\', tail: 'WinSxS', note: '被新版本替换掉的系统组件，由 Windows 自带工具清理。', cmd: 'Dism.exe /Online /Cleanup-Image /StartComponentCleanup', meta: false, last: '6 个月前', days: 180 },
 ];
-
-export const ALABEL: Record<CleanAct, string> = { rebuild: '删除 · 可重建', recycle: '移入回收站 · 可撤销', empty: '清空 · 不可恢复', setting: '改设置 · 可还原' };
-export const LVN: Record<Level, string> = { L1: '可重建', L2: '需审阅', L3: '不可恢复' };
-export const LVD: Record<Level, string> = { L1: '删了会自动重建，放心清理', L2: '可能还用得到，或会改系统设置', L3: '清空后找不回' };
-export const AGES: [string, number, number][] = [['今天', 0, 0], ['一周内', 1, 7], ['一个月内', 8, 31], ['半年内', 32, 180], ['半年以上', 181, 900]];
-export const DEFAULT_CHECKED = ['condapkgs', 'pip', 'temp', 'browser', 'npm', 'nvidia', 'delivery', 'winupd'];

@@ -1,11 +1,5 @@
-// Space-map model for C:. Ported from the R19 design data.
-import type { Level } from '../lib/util';
-
-export type MapLevel = Level | 'L4';
-export type MapAct = 'keep' | 'setting' | 'rebuild' | 'recycle' | 'empty';
-export interface Leaf { id: string; cat: string; catName: string; name: string; short: string; xs: string; gb: number; gain: number; level: MapLevel; act: MapAct; pathHead: string; pathTail: string; note: string; cmd: string; meta: boolean; move: string; rv: number; actual: number }
-export interface Cat { id: string; name: string; short: string; items: string[]; cl: string }
-export interface Move { id: string; name: string; cells: string[]; frm: string; to: string; how: string; mins: string; link: boolean; verify: string; steps: string[]; generic: boolean }
+// Demo space-map model for C: (from the R19 design).
+import type { Cat, Leaf, Move } from '../../types';
 
 export const LEAVES: Leaf[] = [
  {

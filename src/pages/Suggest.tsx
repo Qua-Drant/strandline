@@ -1,6 +1,10 @@
 import { Fragment, useState } from 'react';
 import { TideCalendar } from '../components/TideCalendar';
-import { AGES, ALABEL, DEFAULT_CHECKED, LVD, LVN, ROWS, type CleanAct } from '../data/suggest';
+import { AGES, ALABEL, LVD, LVN } from '../lib/labels';
+import { diskService } from '../services/diskService';
+import type { CleanAct, CleanRow } from '../services/types';
+import { useData } from '../services/useData';
+import { skippedToast } from '../services/receipts';
 import { sound } from '../lib/sound';
 import { cx, shortHead, type Level } from '../lib/util';
 import { Link } from '../components/Link';
@@ -9,15 +13,19 @@ import { Cbx, Modal, PageHeader, Scroll, Seg } from '../shell/parts';
 import { useEscape, useShell } from '../shell/context';
 
 type Filter = 'all' | Level;
-const toSet = (ids: string[]) => Object.fromEntries(ids.map((i) => [i, true])) as Record<string, boolean>;
 
 export function Suggest() {
-  const { cFree: cf, setCFree, pushToast } = useShell();
+  const { cFree: cf, sys, refreshDrives, pushToast } = useShell();
+  const total = sys.total;
+  const [rows, reload] = useData(() => diskService.getSuggestions(sys.id), sys.id);
+  const ROWS: CleanRow[] = rows ?? [];
   const [filter, setFilter] = useState<Filter>('all');
   const [sort, setSort] = useState<'size' | 'last'>('size');
-  const [checked, setChecked] = useState<Record<string, boolean>>(() => toSet(DEFAULT_CHECKED));
+  // default: every rebuildable item is ticked, as in the design
+  const [picked, setChecked] = useState<Record<string, boolean> | null>(null);
+  const checked: Record<string, boolean> = picked ?? Object.fromEntries(ROWS.filter((r) => r.level === 'L1').map((r) => [r.id, true]));
   const [open, setOpen] = useState<string | null>(null);
-  const [done, setDone] = useState<Record<string, boolean>>({});
+  const done: Record<string, boolean> = Object.fromEntries(ROWS.filter((r) => r.done).map((r) => [r.id, true]));
   const [confirm, setConfirm] = useState(false);
   useEscape(() => setConfirm(false));
 
@@ -27,7 +35,7 @@ export function Suggest() {
   const binGb = sel.filter((r) => r.act === 'recycle').reduce((a, r) => a + r.gain, 0);
   const sorter = sort === 'size' ? (a: typeof ROWS[0], b: typeof ROWS[0]) => b.gain - a.gain : (a: typeof ROWS[0], b: typeof ROWS[0]) => b.days - a.days;
   const lvls: Level[] = filter === 'all' ? ['L1', 'L2', 'L3'] : [filter];
-  const maxG = Math.max(...ROWS.map((r) => r.gain));
+  const maxG = Math.max(0.1, ...ROWS.map((r) => r.gain));
   const gbL = (lv: Level) => live.filter((r) => r.level === lv).reduce((a, r) => a + r.gain, 0);
 
   const cgroups = (['rebuild', 'recycle', 'setting', 'empty'] as CleanAct[]).map((a) => {
@@ -39,21 +47,29 @@ export function Suggest() {
   const ages = AGES.map(([label, a, b]) => { const rs = ageRows.filter((r) => r.days >= a && r.days <= b); return { label, n: rs.length, gb: rs.reduce((x, r) => x + r.gain, 0) }; });
   const ageMax = Math.max(1, ...ages.map((a) => a.gb));
   const after = cf + freeGb;
-  const st = (f: number) => (f / 512 < 0.12 ? '空间紧张' : f / 512 < 0.2 ? '空间偏紧' : '空间充足');
-  const pos = (f: number) => Math.min(100, f / 512 / 0.3 * 100).toFixed(1) + '%';
+  const st = (f: number) => (f / total < 0.12 ? '空间紧张' : f / total < 0.2 ? '空间偏紧' : '空间充足');
+  const pos = (f: number) => Math.min(100, f / total / 0.3 * 100).toFixed(1) + '%';
 
   const stones = (['L1', 'L2', 'L3'] as Level[]).map((lv) => ({ lv, g: gbL(lv) })).filter((x) => x.g > 0.05).sort((a, b) => a.g - b.g);
 
-  const doClean = () => {
-    const d = { ...done }; sel.forEach((r) => { d[r.id] = true; });
-    setConfirm(false); setDone(d); setChecked({}); setCFree(cf + freeGb);
-    sound.wash(false, 520);
-    pushToast({ kind: 'ok', title: '已释放 ' + freeGb.toFixed(1) + ' GB', sub: binGb > 0.05 ? binGb.toFixed(1) + ' GB 已移入回收站，可在「活动」里撤销' : '记录已写入「活动」' }, 6000);
+  const doClean = async () => {
+    setConfirm(false);
+    const rc = await diskService.clean(sys.id, sel.map((r) => r.id));
+    setChecked({});
+    await reload(); await refreshDrives();
+    if (rc.items.length) {
+      sound.wash(false, 520);
+      const undoable = rc.items.filter((i) => i.undoable);
+      pushToast({ kind: 'ok', title: rc.freed > 0.05 ? '已释放 ' + rc.freed.toFixed(1) + ' GB' : rc.bin.toFixed(1) + ' GB 已移入回收站',
+        sub: rc.freed > 0.05 && rc.bin > 0.05 ? rc.bin.toFixed(1) + ' GB 已移入回收站，可在「活动」里撤销' : rc.bin > 0.05 ? '清空回收站后才会腾出空间' : '记录已写入「活动」',
+        ...(undoable.length ? { action: '撤销', run: async () => { await diskService.undoReceipt(rc.id); await reload(); await refreshDrives(); } } : {}) }, 8000);
+    }
+    skippedToast(rc, pushToast);
   };
 
   return (
     <>
-      <PageHeader crumb={['C 盘', '清理建议']} />
+      <PageHeader crumb={[sys.id + ' 盘', '清理建议']} />
       <Scroll className="pg bpg">
         <div className="sg">
           <div className="sg-main">
@@ -159,17 +175,17 @@ export function Suggest() {
               <Link className="dk-link" to={PATHS.map}>在空间地图中查看 →</Link>
             </section>
             <section className="bx" aria-labelledby="sg-after">
-              <h2 id="sg-after" className="bx-h2 wx-k">清理后的 C 盘</h2>
+              <h2 id="sg-after" className="bx-h2 wx-k">清理后的 {sys.id} 盘</h2>
               <div className="uv" role="img" aria-label={`现在 ${cf.toFixed(1)} GB 可用，清理后 ${after.toFixed(1)} GB`}>
                 <span className="uv-bar" /><span className="uv-dot now" style={{ left: pos(cf) }} /><span className="uv-dot aft" style={{ left: pos(after) }} />
               </div>
               <div className="uv-sc" aria-hidden="true"><span>紧张</span><span>偏紧</span><span>充足</span></div>
               <div className="ab-l"><span>现在<b className="mono">{cf.toFixed(1)}</b>GB</span><span className="tide">清理后<b className="mono">{after.toFixed(1)}</b>GB</span></div>
               <p className="bx-foot">{freeGb > 0.05
-                ? '可用从 ' + (cf / 5.12).toFixed(1) + '% 升到 ' + (after / 5.12).toFixed(1) + '%' + (st(cf) !== st(after) ? '，从「' + st(cf) + '」变为「' + st(after) + '」' : '')
+                ? '可用从 ' + (cf / total * 100).toFixed(1) + '% 升到 ' + (after / total * 100).toFixed(1) + '%' + (st(cf) !== st(after) ? '，从「' + st(cf) + '」变为「' + st(after) + '」' : '')
                 : '勾选后这里会预览清理后的空间'}</p>
             </section>
-            <TideCalendar cf={cf} after={after} />
+            <TideCalendar cf={cf} after={after} total={total} drive={sys.id} />
           </aside>
         </div>
       </Scroll>
@@ -189,7 +205,7 @@ export function Suggest() {
             {sel.some((r) => r.act === 'empty') && <p style={{ margin: 0, fontSize: '0.75rem', color: 'var(--accent)' }}>清空回收站后，里面的文件无法找回。</p>}
             <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '0.5rem' }}>
               <button type="button" className="btn" autoFocus onClick={() => setConfirm(false)}>取消</button>
-              <button type="button" className="btn btn-primary" onClick={doClean}>清理</button>
+              <button type="button" className="btn btn-primary" onClick={() => void doClean()}>清理</button>
             </div>
           </section>
         </Modal>

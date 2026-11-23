@@ -1,15 +1,15 @@
 import type { CSSProperties, ReactNode } from 'react';
 import { createPortal } from 'react-dom';
 import { Icon } from '../components/Icon';
-import { ATMO_TEXT, atmoOf, C_TOTAL, cx } from '../lib/util';
+import { ATMO_TEXT, atmoOf, cx } from '../lib/util';
 import { useShell } from './context';
 
 /** "空间紧张 / 偏紧 / 充足" status tag in each page header, keyed off C: free space. */
 export function AtmoTag() {
-  const { cFree } = useShell();
-  const a = atmoOf(cFree);
+  const { cFree, sys } = useShell();
+  const a = atmoOf(cFree, sys.total);
   return (
-    <span className={'atmo-tag t-' + a} role="status" title={'C 盘可用 ' + cFree.toFixed(1) + ' GB · ' + (cFree / C_TOTAL * 100).toFixed(1) + '%'}>
+    <span className={'atmo-tag t-' + a} role="status" title={sys.id + ' 盘可用 ' + cFree.toFixed(1) + ' GB · ' + (cFree / sys.total * 100).toFixed(1) + '%'}>
       <i aria-hidden="true" />{ATMO_TEXT[a]}
     </span>
   );

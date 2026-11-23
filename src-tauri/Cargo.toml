@@ -1,0 +1,53 @@
+[package]
+name = "strandline"
+version = "0.1.0"
+description = "Strandline · 拾滩 — a safety-first disk organizer for Windows"
+authors = ["Strandline contributors"]
+license = "MIT"
+repository = ""
+edition = "2024"
+rust-version = "1.90"
+default-run = "strandline"
+
+[lib]
+name = "strandline_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[[bin]]
+name = "strandline"
+path = "src/main.rs"
+
+[[bin]]
+name = "sandbox-gen"
+path = "src/bin/sandbox_gen.rs"
+
+[build-dependencies]
+tauri-build = { version = "2.7.6", features = [] }
+
+[dependencies]
+tauri = { version = "2.12.7", features = [] }
+tauri-plugin-log = "2"
+log = "0.4"
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+thiserror = "2"
+jwalk = "0.8"
+rayon = "1.10"
+blake3 = "1.5"
+trash = "5"
+sysinfo = "0.37"
+dirs = "6"
+
+[target.'cfg(windows)'.dependencies]
+junction = "1"
+winreg = "0.55"
+windows-sys = { version = "0.60", features = ["Win32_Foundation", "Win32_UI_Shell", "Win32_Storage_FileSystem", "Win32_System_Time"] }
+
+[dev-dependencies]
+tempfile = "3"
+
+[profile.release]
+codegen-units = 1
+lto = true
+opt-level = "s"
+strip = true

@@ -5,27 +5,13 @@ import { Link } from '../components/Link';
 import { PATHS } from '../routes';
 import { Cbx, PageHeader, Scroll, Seg } from '../shell/parts';
 import { useShell } from '../shell/context';
+import { diskService } from '../services/diskService';
+import type { BigFile, FType, ManagedKind } from '../services/types';
+import { useData } from '../services/useData';
+import { skippedToast } from '../services/receipts';
 
-type FType = 'video' | 'img' | 'model' | 'inst' | 'zip' | 'data' | 'sys';
-type Kind = 'map' | 'vm' | 'hiber' | 'copy' | null;
-interface BigFile { id: string; name: string; dir: string; gb: number; type: FType; last: string; managed: string; act: string | null; kind: Kind; why: string | null }
+type Kind = ManagedKind;
 
-const FILES: BigFile[] = [
-  { id: 'f0', name: 'docker_data.vhdx', dir: '%LOCALAPPDATA%\\Docker\\wsl\\disk', gb: 38.2, type: 'img', last: '昨天', managed: '由 Docker 管理', act: '在空间地图中清理或迁移', kind: 'map', why: 'Docker 镜像和容器都在这块虚拟磁盘里，需在 Docker 内清理后再压缩' },
-  { id: 'f1', name: 'ext4.vhdx', dir: '%LOCALAPPDATA%\\Packages\\CanonicalGroupLimited.Ubuntu\\LocalState', gb: 21.4, type: 'img', last: '今天', managed: '由 WSL 管理', act: '在空间地图中迁移到 D:', kind: 'map', why: 'Ubuntu 子系统的整块磁盘，可以整体迁移到其他盘' },
-  { id: 'f2', name: 'pagefile.sys', dir: 'C:\\', gb: 15.0, type: 'sys', last: '—', managed: '系统文件', act: '打开虚拟内存设置', kind: 'vm', why: 'Windows 虚拟内存，系统按需自动管理' },
-  { id: 'f3', name: 'hiberfil.sys', dir: 'C:\\', gb: 12.8, type: 'sys', last: '—', managed: '系统文件', act: '关闭休眠可腾出 12.8 GB', kind: 'hiber', why: '休眠功能使用的文件，关闭休眠后会自动删除' },
-  { id: 'f4', name: '毕业答辩录像.mov', dir: '%USERPROFILE%\\Documents\\答辩', gb: 6.1, type: 'video', last: '8 个月前', managed: '', act: null, kind: null, why: null },
-  { id: 'f5', name: 'ubuntu-24.04-desktop-amd64.iso', dir: '%USERPROFILE%\\Downloads', gb: 5.9, type: 'img', last: '5 个月前', managed: '', act: null, kind: null, why: null },
-  { id: 'f6', name: 'sha256-6a0746a1ec1a', dir: '%USERPROFILE%\\.ollama\\models\\blobs', gb: 4.7, type: 'model', last: '3 天前', managed: '由 Ollama 管理', act: '复制 ollama rm 命令', kind: 'copy', why: '本地模型文件，需用 Ollama 自己删除' },
-  { id: 'f7', name: 'model-00001-of-00004.safetensors', dir: '%USERPROFILE%\\.cache\\huggingface\\hub\\models--Qwen--Qwen2-7B-Instruct', gb: 3.9, type: 'model', last: '7 个月前', managed: '', act: null, kind: null, why: null },
-  { id: 'f8', name: 'model-00002-of-00004.safetensors', dir: '%USERPROFILE%\\.cache\\huggingface\\hub\\models--Qwen--Qwen2-7B-Instruct', gb: 3.9, type: 'model', last: '7 个月前', managed: '', act: null, kind: null, why: null },
-  { id: 'f9', name: '组会录屏_2026-09.mp4', dir: '%USERPROFILE%\\Documents\\WeChat Files\\wxid_…\\FileStorage\\Video', gb: 3.4, type: 'video', last: '2 个月前', managed: '', act: null, kind: null, why: null },
-  { id: 'f10', name: 'cuda_12.4.0_windows.exe', dir: '%USERPROFILE%\\Downloads', gb: 3.1, type: 'inst', last: '6 个月前', managed: '', act: null, kind: null, why: null },
-  { id: 'f11', name: 'ArcGISPro_backup_2025.zip', dir: '%USERPROFILE%\\Documents\\Backup', gb: 2.6, type: 'zip', last: '1 年前', managed: '', act: null, kind: null, why: null },
-  { id: 'f12', name: 'LC09_L2SP_123032_20240611_T1.tar', dir: '%USERPROFILE%\\Datasets\\Landsat-9', gb: 1.8, type: 'data', last: '4 个月前', managed: '', act: null, kind: null, why: null },
-  { id: 'f13', name: 'S2B_MSIL2A_20230805_T50QKM.zip', dir: '%USERPROFILE%\\Datasets\\Sentinel-2', gb: 1.2, type: 'data', last: '1 个月前', managed: '', act: null, kind: null, why: null },
-];
 const TYPES: [FType | 'all', string][] = [['all', '全部'], ['video', '视频'], ['img', '磁盘镜像'], ['model', '模型'], ['inst', '安装包'], ['zip', '压缩包'], ['data', '数据'], ['sys', '系统文件']];
 const TN = Object.fromEntries(TYPES) as Record<FType | 'all', string>;
 const HREF: Partial<Record<NonNullable<Kind>, string>> = { map: PATHS.map, hiber: PATHS.suggest };
@@ -48,15 +34,16 @@ const Lock = () => (
 );
 
 export function Large() {
-  const { pushToast } = useShell();
+  const { pushToast, refreshDrives, sys } = useShell();
   const [type, setType] = useState<FType | 'all'>('all');
   const [th, setTh] = useState(1);
   const [checked, setChecked] = useState<Record<string, boolean>>({});
-  const [gone, setGone] = useState<Record<string, boolean>>({});
+  const [files, reload] = useData(() => diskService.findLarge(sys.id), sys.id);
+  const FILES = files ?? [];
   const [hf, setHf] = useState<string | null>(null);
   const [sort, setSort] = useState<'size' | 'old' | 'both'>('size');
 
-  const inTh = FILES.filter((f) => f.gb >= th && !gone[f.id]);
+  const inTh = FILES.filter((f) => f.gb >= th);
   const freeAll = inTh.filter((f) => !f.managed), lockAll = inTh.filter((f) => f.managed);
   const sorter = sort === 'size' ? (a: BigFile, b: BigFile) => b.gb - a.gb
     : sort === 'old' ? (a: BigFile, b: BigFile) => months(b.last) - months(a.last) || b.gb - a.gb
@@ -82,13 +69,17 @@ export function Large() {
     return { f, x, y, d, h, aria };
   });
 
-  const recycle = () => {
-    const ids = sel.map((f) => f.id), g = { ...gone };
-    ids.forEach((id) => { g[id] = true; });
-    setGone(g); setChecked({});
-    sound.wash(false, 460);
-    pushToast({ kind: 'ok', title: ids.length + ' 个文件已移入回收站', sub: selG.toFixed(1) + ' GB · 清空回收站后才会腾出', action: '撤销',
-      run: () => setGone((g2) => { const n = { ...g2 }; ids.forEach((id) => { delete n[id]; }); return n; }) }, 8000);
+  const recycle = async () => {
+    const ids = sel.map((f) => f.id);
+    const rc = await diskService.recycleFiles(ids);
+    setChecked({});
+    await reload(); await refreshDrives();
+    if (rc.items.length) {
+      sound.wash(false, 460);
+      pushToast({ kind: 'ok', title: rc.items.length + ' 个文件已移入回收站', sub: rc.bin.toFixed(1) + ' GB · 清空回收站后才会腾出', action: '撤销',
+        run: async () => { await diskService.undoReceipt(rc.id); await reload(); await refreshDrives(); } }, 8000);
+    }
+    skippedToast(rc, pushToast);
   };
   const runLocked = (f: BigFile) => {
     if (f.kind === 'copy') {
@@ -99,7 +90,7 @@ export function Large() {
 
   return (
     <>
-      <PageHeader crumb={['C 盘', '大文件']}>
+      <PageHeader crumb={[sys.id + ' 盘', '大文件']}>
         <Seg label="大小下限" value={th} onPick={(t) => { setTh(t); setChecked({}); }} items={[[1, '≥ 1 GB'], [5, '≥ 5 GB'], [10, '≥ 10 GB']]} />
       </PageHeader>
       <Scroll className="pg lp">
@@ -165,7 +156,7 @@ export function Large() {
           <span className="dk-sel"><b>{sel.length ? '已选 ' + sel.length + ' 个 · ' + selG.toFixed(1) + ' GB' : '点选不再需要的文件'}</b><span>{sel.length ? '还有 ' + (freeG - selG).toFixed(1) + ' GB 可以处理' : '可以处理的共 ' + freeG.toFixed(1) + ' GB'}</span></span>
           <span className="dk-note">移入回收站 · 清空回收站后才会腾出磁盘空间 · 30 天内可撤销</span>
           {sel.length > 0 && <button type="button" className="link-btn small" onClick={() => setChecked({})}>取消选择</button>}
-          <button type="button" className="btn btn-primary" disabled={!sel.length} onClick={recycle}>{sel.length ? '移入回收站 ' + sel.length + ' 个' : '移入回收站'}</button>
+          <button type="button" className="btn btn-primary" disabled={!sel.length} onClick={() => void recycle()}>{sel.length ? '移入回收站 ' + sel.length + ' 个' : '移入回收站'}</button>
         </div></div>
       </Scroll>
     </>

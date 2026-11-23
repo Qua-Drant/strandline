@@ -3,18 +3,12 @@ import { sound } from '../lib/sound';
 import { cx, shortHead } from '../lib/util';
 import { PageHeader, Scroll, Seg } from '../shell/parts';
 import { useShell } from '../shell/context';
+import { diskService } from '../services/diskService';
+import type { DupGroup, Receipt } from '../services/types';
+import { useData } from '../services/useData';
+import { skippedToast } from '../services/receipts';
 
-interface Copy { dir: string; date: string }
-interface Group { id: string; name: string; each: number; copies: Copy[] }
-
-const GROUPS: Group[] = [
-  { id: 'g1', name: '毕业答辩录像.mov', each: 6.1, copies: [{ dir: '%USERPROFILE%\\Documents\\答辩', date: '2026-03-02' }, { dir: '%USERPROFILE%\\Documents\\WeChat Files\\wxid_…\\FileStorage\\File\\2026-03', date: '2026-03-03' }] },
-  { id: 'g2', name: 'S2B_MSIL2A_20230805_T50QKM.zip', each: 1.2, copies: [{ dir: '%USERPROFILE%\\Datasets\\Sentinel-2', date: '2025-10-01' }, { dir: '%USERPROFILE%\\Downloads', date: '2025-09-30' }] },
-  { id: 'g3', name: '论文插图_v3.zip', each: 0.42, copies: [{ dir: '%USERPROFILE%\\Documents\\论文', date: '2026-06-10' }, { dir: '%USERPROFILE%\\Desktop', date: '2026-06-11' }, { dir: '%USERPROFILE%\\Documents\\WeChat Files\\wxid_…\\FileStorage\\File\\2026-06', date: '2026-06-11' }] },
-  { id: 'g4', name: 'DSM_0.5m_tile_07.tif', each: 0.75, copies: [{ dir: '%USERPROFILE%\\Datasets\\DSM', date: '2026-02-14' }, { dir: '%USERPROFILE%\\Desktop\\临时', date: '2026-08-20' }] },
-  { id: 'g5', name: '组会汇报_2026-10.pptx', each: 0.21, copies: [{ dir: '%USERPROFILE%\\Documents\\组会', date: '2026-10-09' }, { dir: '%USERPROFILE%\\Desktop', date: '2026-10-09' }, { dir: '%USERPROFILE%\\Downloads', date: '2026-10-10' }, { dir: '%USERPROFILE%\\Documents\\WeChat Files\\wxid_…\\FileStorage\\File\\2026-10', date: '2026-10-10' }] },
-  { id: 'g6', name: '实验记录汇总.xlsx', each: 0.14, copies: [{ dir: '%USERPROFILE%\\Documents\\实验', date: '2026-07-01' }, { dir: '%USERPROFILE%\\Desktop', date: '2026-09-12' }, { dir: '%USERPROFILE%\\Downloads', date: '2026-09-13' }] },
-];
+type Group = DupGroup;
 
 const fmt = (g: number) => (g >= 1 ? g.toFixed(1) + ' GB' : Math.round(g * 1000) + ' MB');
 const PLACES: [string, string, RegExp][] = [['wx', '微信收到的文件', /FileStorage/], ['dl', '下载', /Downloads/], ['dt', '桌面', /Desktop/], ['ds', '数据集', /Datasets/], ['doc', '文稿', /Documents/]];
@@ -36,10 +30,13 @@ type Rule = 'docs' | 'old' | 'new';
 const RULE_NOTE: Record<Rule, string> = { docs: '优先留下「文稿」和数据集里的那份', old: '留下最早出现的那份，后来的复制和转存算副本', new: '留下最新的那份，早先的算副本' };
 
 export function Dupes() {
-  const { pushToast } = useShell();
+  const { pushToast, refreshDrives, sys } = useShell();
   const [rule, setRule] = useState<Rule>('docs');
   const [keep, setKeep] = useState<Record<string, number>>({});
-  const [done, setDone] = useState(false);
+  const [receipt, setReceipt] = useState<Receipt | null>(null);
+  const [groups, reload] = useData(() => diskService.findDuplicates(sys.id), sys.id);
+  const GROUPS = groups ?? [];
+  const done = !!receipt;
   const [place, setPlace] = useState<string | null>(null);
 
   const keepOf = (g: Group) => {
@@ -58,15 +55,21 @@ export function Dupes() {
   const visG = GROUPS.filter((g) => !place || g.copies.some((c, i) => i !== keepOf(g) && PLACE(c.dir)[0] === place));
   const setKeepFor = (g: Group, i: number) => setKeep((kk) => ({ ...kk, [g.id]: i }));
 
-  const run = () => {
-    setDone(true);
+  const undo = async () => {
+    if (receipt) await diskService.undoReceipt(receipt.id);
+    setReceipt(null); await reload(); await refreshDrives();
+  };
+  const run = async () => {
+    const rc = await diskService.recycleDuplicates(GROUPS.map((g) => ({ groupId: g.id, keep: keepOf(g) })));
+    setReceipt(rc); await reload(); await refreshDrives();
     sound.wash(false, 460);
-    pushToast({ kind: 'ok', title: nCopies + ' 份副本已移入回收站', sub: reclaim.toFixed(1) + ' GB · 清空回收站后释放', action: '撤销', run: () => setDone(false) }, 8000);
+    pushToast({ kind: 'ok', title: rc.items.length + ' 份副本已移入回收站', sub: rc.bin.toFixed(1) + ' GB · 清空回收站后释放', action: '撤销', run: () => void undo() }, 8000);
+    skippedToast(rc, pushToast);
   };
 
   return (
     <>
-      <PageHeader crumb={['C 盘', '重复文件']} />
+      <PageHeader crumb={[sys.id + ' 盘', '重复文件']} />
       <Scroll className="pg lp dpx">
         <section className="collate" aria-label="重复文件概况">
           <div className="co-n"><span className="mono">{done ? '0.0' : reclaim.toFixed(1)}</span><span className="u">GB</span>
@@ -110,16 +113,18 @@ export function Dupes() {
             </section>
           );
         })}
+        {!done && groups === null && <div className="muted" style={{ padding: '3rem 0', textAlign: 'center' }}>正在按大小、局部哈希、全量哈希比对文件…</div>}
+        {!done && groups !== null && !GROUPS.length && <div className="muted" style={{ padding: '3rem 0', textAlign: 'center' }}>没有发现完全相同的文件</div>}
         {done && (
           <div style={{ display: 'grid', justifyItems: 'center', gap: '0.5rem', padding: '3rem 0' }} className="muted">
-            <span>{nCopies} 份副本已移入回收站 · {reclaim.toFixed(1)} GB，清空回收站后释放</span>
-            <button type="button" className="link-btn" onClick={() => setDone(false)}>撤销</button>
+            <span>{receipt!.items.length} 份副本已移入回收站 · {receipt!.bin.toFixed(1)} GB，清空回收站后释放</span>
+            <button type="button" className="link-btn" onClick={() => void undo()}>撤销</button>
           </div>
         )}
         <div className="dockw"><div className={cx('dock', !done && 'is-active')} role="region" aria-label="操作">
           <span className="dk-sel"><b>{done ? '没有待处理的重复文件' : nCopies + ' 份副本 · ' + reclaim.toFixed(1) + ' GB 移入回收站'}</b><span>{done ? '' : '每组都会留下一份原件'}</span></span>
           <span className="dk-note">清空回收站后才会腾出磁盘空间 · 30 天内可撤销 · 内容按哈希比对，只在本机计算</span>
-          <button type="button" className="btn btn-primary" disabled={done} onClick={run}>移入回收站</button>
+          <button type="button" className="btn btn-primary" disabled={done || !GROUPS.length} onClick={() => void run()}>移入回收站</button>
         </div></div>
       </Scroll>
     </>

@@ -1,16 +1,16 @@
 import { useEffect, useRef, useState, type ReactNode } from 'react';
 import { Icon } from '../components/Icon';
+import { win } from '../lib/desktop';
 import { soundTap } from '../lib/sound';
 import { atmoOf, cx } from '../lib/util';
 import { Link } from '../components/Link';
 import { navigate } from '../router';
 import { NAV, PATHS } from '../routes';
 import { AppPortal } from './parts';
-import { useShell, type DriveId } from './context';
+import { useShell } from './context';
+import type { DriveInfo } from '../services/types';
 
-interface DriveRow { id: DriveId; name: string; total: number; free: number; free30: number }
-
-function driveView(d: DriveRow) {
+function driveView(d: DriveInfo) {
   const lv = atmoOf(d.free, d.total);
   return {
     label: d.id + ': ' + d.name,
@@ -28,16 +28,11 @@ const DISK_VIEWS: [string, string, 'map' | 'suggest' | 'large' | 'dupes'][] = [
 ];
 
 function Sidebar({ path }: { path: string }) {
-  const { cFree, dFree, foam, writing, sbDisk, setSbDisk, task, setPal, suggestN, scanAt } = useShell();
-  const drives: DriveRow[] = [
-    { id: 'C', name: '系统盘', total: 512, free: cFree, free30: 87.2 },
-    { id: 'D', name: '数据盘', total: 1000, free: dFree, free30: 401.5 },
-    { id: 'E', name: '移动硬盘', total: 965, free: 637.0, free30: 637.0 },
-  ];
+  const { drives, writing, sbDisk, setSbDisk, task, setPal, suggestN, scanAt } = useShell();
   const views = drives.map(driveView);
   const hi = views.filter((v) => v.lv === 'hi').length, mid = views.filter((v) => v.lv === 'mid').length;
   const sum = views.length + ' 块磁盘 · ' + (hi ? hi + ' 块空间紧张' : mid ? mid + ' 块空间偏紧' : '空间都充足');
-  const suggestCount = suggestN !== null ? String(suggestN) : foam === 2 ? '8' : '14';
+  const suggestCount = suggestN !== null ? String(suggestN) : '';
 
   return (
     <nav aria-label="主导航" className="side sb">
@@ -56,7 +51,7 @@ function Sidebar({ path }: { path: string }) {
           const v = views[i], cur = sbDisk === d.id;
           return (
             <section key={d.id} className={cx('sb-disk', cur && 'is-cur')} aria-label={v.label}>
-              <button type="button" className="sb-dh" aria-expanded={cur} aria-label={`${v.label}，${v.free} GB 可用，共 ${d.total} GB，${v.state}`} onClick={() => setSbDisk(d.id)}>
+              <button type="button" className="sb-dh" aria-expanded={cur} aria-label={`${v.label}，${v.free} GB 可用，共 ${Math.round(d.total)} GB，${v.state}`} onClick={() => setSbDisk(d.id)}>
                 <span className="sb-rt">
                   <Icon name="disk" size={15} /><span className="sb-dn">{v.label}</span>
                   {writing[d.id] && <span className="wdot" title="正在写入" />}
@@ -65,7 +60,7 @@ function Sidebar({ path }: { path: string }) {
                 <span className={'sb-lv is-' + v.lv} aria-hidden="true">
                   <span className="sb-lv-u" style={{ inlineSize: v.pct }} /><span className="sb-lv-t" style={{ left: v.tide }} />
                 </span>
-                <span className="sb-fold"><span><span className="sb-num"><span><b className="mono">{v.free}</b> GB 可用</span><span className="mono">/ {d.total}</span></span></span></span>
+                <span className="sb-fold"><span><span className="sb-num"><span><b className="mono">{v.free}</b> GB 可用</span><span className="mono">/ {Math.round(d.total)}</span></span></span></span>
               </button>
               <div className="sb-fold"><div>
                 <div className="sb-views" role="group" aria-label={v.label + ' 的视图'}>
@@ -178,8 +173,8 @@ export function Toasts({ bottom = '4.5rem' }: { bottom?: string }) {
 /** Window frame: title bar, sidebar, page area. Pages render their header + content as children. */
 /** `palette` replaces the default page palette (the space map has its own, with commands). */
 export function Shell({ path, children, commands, palette }: { path: string; children: ReactNode; commands?: PaletteCommand[]; palette?: ReactNode }) {
-  const { cFree, theme, pal, setPal, runEscape, setAppEl } = useShell();
-  const atmo = atmoOf(cFree);
+  const { cFree, sys, theme, pal, setPal, runEscape, setAppEl } = useShell();
+  const atmo = atmoOf(cFree, sys.total);
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
@@ -202,13 +197,13 @@ export function Shell({ path, children, commands, palette }: { path: string; chi
         <rect width="100%" height="100%" filter="url(#sl-noise)" />
       </svg>
       <div className={'atmo t-' + atmo} aria-hidden="true"><i className="a-hi" /><i className="a-mid" /><i className="a-lo" /></div>
-      <header className="tbar">
+      <header className="tbar" data-tauri-drag-region onDoubleClick={(e) => { if (e.target === e.currentTarget) win.toggleMaximize(); }}>
         <Icon name="logo" size={18} />
-        <span className="brand"><span className="brand-n">Strandline</span><span className="brand-t">拾滩</span></span>
-        <span style={{ flex: '1 1 auto' }} />
-        <button type="button" className="cap" aria-label="最小化"><Icon name="winMin" size={10} /></button>
-        <button type="button" className="cap" aria-label="最大化"><Icon name="winMax" size={10} /></button>
-        <button type="button" className="cap cap-close" aria-label="关闭"><Icon name="winClose" size={10} /></button>
+        <span className="brand" data-tauri-drag-region><span className="brand-n">Strandline</span><span className="brand-t">拾滩</span></span>
+        <span style={{ flex: '1 1 auto' }} data-tauri-drag-region />
+        <button type="button" className="cap" aria-label="最小化" onClick={win.minimize}><Icon name="winMin" size={10} /></button>
+        <button type="button" className="cap" aria-label="最大化" onClick={win.toggleMaximize}><Icon name="winMax" size={10} /></button>
+        <button type="button" className="cap cap-close" aria-label="关闭" onClick={win.close}><Icon name="winClose" size={10} /></button>
       </header>
       <div style={{ display: 'flex', flex: '1 1 auto', minBlockSize: 0, flexWrap: 'wrap' }}>
         <Sidebar path={path} />

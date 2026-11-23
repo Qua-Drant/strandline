@@ -2,6 +2,9 @@ import { useState, type ReactNode } from 'react';
 import { sound } from '../lib/sound';
 import { PageHeader, Scroll } from '../shell/parts';
 import { useShell, type Theme } from '../shell/context';
+import { diskService } from '../services/diskService';
+import type { Settings as SettingsData } from '../services/types';
+import { useData } from '../services/useData';
 
 const SWD = { autostart: true, sound: false, daily: true, recycleFirst: true, checkRunning: true, skipInUse: true, low: true, weekly: false, inst: true };
 type SwKey = keyof typeof SWD;
@@ -36,16 +39,20 @@ function Kv({ title, desc, htmlFor, children, top, mono }: { title: string; desc
 
 export function Settings() {
   const { theme, setTheme, pushToast } = useShell();
-  const [sw, setSw] = useState<Record<SwKey, boolean>>({ ...SWD, sound: sound.enabled() });
-  const [close, setClose] = useState<'tray' | 'quit'>('tray');
-  const [bin, setBin] = useState<'30' | '60' | 'never'>('30');
   const [sec, setSec] = useState('set-general');
-  const [drives, setDrives] = useState<Record<string, boolean>>({ C: true, D: true, E: false });
-  const [excl, setExcl] = useState(['%USERPROFILE%\\Projects\\active', 'D:\\Backups']);
+  const [st, reload] = useData(() => diskService.getSettings());
+  if (!st) return <PageHeader crumb={['设置']} />;
+  const put = async (patch: Partial<SettingsData>) => { await diskService.saveSettings(patch); await reload(); };
+  const sw: Record<SwKey, boolean> = { ...SWD, ...Object.fromEntries(Object.keys(SWD).map((k) => [k, st[k as SwKey]])), sound: sound.enabled() } as Record<SwKey, boolean>;
+  const { close, bin, drives, excl } = st;
+  const setClose = (v: SettingsData['close']) => void put({ close: v });
+  const setBin = (v: SettingsData['bin']) => void put({ bin: v });
+  const setDrives = (v: Record<string, boolean>) => void put({ drives: v });
+  const setExcl = (v: string[]) => void put({ excl: v });
 
   const tg = (k: SwKey) => () => {
     const v = !sw[k];
-    setSw({ ...sw, [k]: v });
+    void put({ [k]: v });
     if (k === 'sound') { sound.setEnabled(v); if (v) { sound.click(true); window.setTimeout(() => sound.wash(true, 520), 140); } }
   };
   const T = (k: SwKey) => <Toggle id={'st-' + k} on={sw[k]} onChange={tg(k)} />;
@@ -68,6 +75,15 @@ export function Settings() {
           <section id="set-scan" aria-labelledby="h-scan"><h2 id="h-scan">扫描</h2>
             <Kv title="扫描哪些磁盘" desc="只读取文件夹结构和大小">
               <div className="fchips">{['C', 'D', 'E'].map((d) => <button key={d} type="button" className="fchip" aria-pressed={!!drives[d]} onClick={() => setDrives({ ...drives, [d]: !drives[d] })}>{d}:</button>)}</div>
+            </Kv>
+            <Kv top title="扫描范围" desc={<>
+              留空表示扫描整个磁盘。开发与测试时填沙盒目录（例如 D:\01_Research\Strandline\sandbox），所有清理、迁移都只会发生在这里面
+              {st.scanRoot && <div className="mono small" style={{ color: 'var(--ink)', marginTop: '0.375rem', overflowWrap: 'anywhere' }}>{st.scanRoot}</div>}
+            </>}>
+              <span style={{ display: 'inline-flex', gap: '0.375rem' }}>
+                {st.scanRoot && <button type="button" className="btn btn-ghost btn-sm" onClick={() => void put({ scanRoot: '' })}>改为整盘</button>}
+                <button type="button" className="btn btn-sm" onClick={() => { const p = window.prompt('扫描这个文件夹（完整路径）', st.scanRoot); if (p !== null) void put({ scanRoot: p.trim() }); }}>设置…</button>
+              </span>
             </Kv>
             <Kv title="每天快速扫描一次" desc="13:00 左右，电脑空闲时进行，大约 1 分钟" htmlFor="st-daily">{T('daily')}</Kv>
             <Kv top title="不扫描这些文件夹" desc={<>

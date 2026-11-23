@@ -1,21 +1,24 @@
 import { createContext, useContext, useEffect, useLayoutEffect, useRef } from 'react';
+import type { DriveInfo } from '../services/types';
 
 export interface Toast { id: number; kind: 'ok' | 'err'; title: string; sub?: string; action?: string; run?: () => void }
 export type ToastInput = Omit<Toast, 'id'>;
 export interface Task { title: string; note: string; p: number; scan: boolean; color?: string; meta?: string; paused?: boolean }
 export type Theme = 'sys' | 'light' | 'dark';
-export type DriveId = 'C' | 'D' | 'E';
+export type DriveId = string;
 
 export interface ShellState {
-  /** free GB on C: — shared so a clean on any page shows in the sidebar and overview */
+  /** drives as reported by the disk service (sidebar, overview) */
+  drives: DriveInfo[];
+  /** the system drive (C:) */
+  sys: DriveInfo;
+  /** free GB on the system drive — shared so a clean on any page shows in the sidebar and overview */
   cFree: number;
-  setCFree: (v: number | ((p: number) => number)) => void;
+  /** re-read drive sizes from the service after an action */
+  refreshDrives: () => Promise<void>;
   /** overview's one-tap cache clean: 0 idle, 1 running, 2 done */
   foam: 0 | 1 | 2;
   setFoam: (v: 0 | 1 | 2) => void;
-  /** D: free GB (changes after migrations on the map) */
-  dFree: number;
-  setDFree: (v: number | ((p: number) => number)) => void;
   writing: Partial<Record<DriveId, boolean>>;
   setWriting: (v: Partial<Record<DriveId, boolean>>) => void;
   theme: Theme;

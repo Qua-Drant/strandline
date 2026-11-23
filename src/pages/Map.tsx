@@ -1,31 +1,30 @@
 import { Fragment, useCallback, useEffect, useLayoutEffect, useRef, useState, type CSSProperties, type MouseEvent as RMouseEvent, type PointerEvent as RPointerEvent } from 'react';
 import { Icon } from '../components/Icon';
-import { CATS, LEAVES, MOVES, type Leaf, type MapAct, type MapLevel, type Move } from '../data/map';
-import { HIST30 } from '../data/history';
+import { ALABEL, LVL } from '../lib/labels';
 import { sound } from '../lib/sound';
 import { layoutMap, MINW, tw, type Box, type MapItems } from '../lib/treemap';
 import { ATMO_TEXT, atmoOf, clamp, cx } from '../lib/util';
 import { PATHS } from '../routes';
+import { diskService } from '../services/diskService';
+import { skippedToast } from '../services/receipts';
+import type { Cat, Leaf, MapAct, MapLevel, MapModel, Move } from '../services/types';
 import { AppPortal, Cbx, Modal, Seg } from '../shell/parts';
 import { Shell, Toasts } from '../shell/Shell';
 import { useEscape, useShell } from '../shell/context';
 import { DECO } from './map/deco';
 
 // ---------- constants
-const TOTAL = 512, FREE0 = 44.0, FREE30 = 87.2;
 const NW = 828, NH = 777;
-/** representative changes on the 30-day tide meter (index 0 = 10/23, 29 = today) */
-const TEV: Record<number, string> = { 0: '30 天前', 4: '微信聊天原图 +1.6G', 12: 'Docker 镜像 +9.8G', 18: 'Sentinel-2 下载 +1.3G', 24: 'pip 缓存 +1.5G', 29: '今日扫描' };
-const ALABEL: Record<MapAct, string> = { rebuild: '删除 · 可重建', recycle: '移入回收站 · 可撤销', empty: '清空 · 不可恢复', setting: '改设置 · 可还原', keep: '' };
-const LVL: Record<string, string> = { L1: '可重建', L2: '需审阅', L3: '不可恢复', L4: '保留', mix: '混合' };
-const DRIVES: Record<string, { name: string; total: number; free: number }> = { D: { name: '数据盘', total: 1000, free: 388 }, E: { name: '移动硬盘', total: 965, free: 637 } };
+/** demo only: representative changes on the 30-day tide meter (index 0 = 30 days ago, 29 = today) */
+const TEV: Record<number, string> = diskService.mode === 'mock'
+  ? { 0: '30 天前', 4: '微信聊天原图 +1.6G', 12: 'Docker 镜像 +9.8G', 18: 'Sentinel-2 下载 +1.3G', 24: 'pip 缓存 +1.5G', 29: '今日扫描' }
+  : { 29: '今日扫描' };
 const RUN_ORDER: MapAct[] = ['rebuild', 'setting', 'empty', 'recycle'];
 const SHOW_ORDER: MapAct[] = ['rebuild', 'recycle', 'setting', 'empty'];
-const LEAF: Record<string, Leaf> = Object.fromEntries(LEAVES.map((l) => [l.id, l]));
-const moveOf = (id: string | null) => MOVES.find((m) => m.id === id);
 const pc = (v: number, d: number) => (v / d * 100).toFixed(3) + '%';
 const driveOf = (path: string) => { const r = /^\s*([A-Za-z]):/.exec(path || ''); return r ? r[1].toUpperCase() : ''; };
-const DEFAULT_CHECKED = ['condapkgs', 'pip', 'temp', 'browser', 'npm', 'nvidia', 'delivery', 'winupd'];
+const hhmm = () => { const d = new Date(); return String(d.getHours()).padStart(2, '0') + ':' + String(d.getMinutes()).padStart(2, '0'); };
+const EMPTY_MODEL: MapModel = { drive: { id: 'C', name: '', total: 1, free: 0, free30: 0 }, leaves: [], cats: [], moves: [], bin: 0, history30: [], scannedAt: '' };
 
 type Phase = 'scanning' | 'results' | 'cleaning' | 'report';
 type Overlay = null | 'bell' | 'menu' | 'detail' | 'move';
@@ -36,9 +35,13 @@ interface Drag { x0: number; y0: number; x1: number; y1: number }
 type Flags = Record<string, boolean>;
 
 interface MapState {
-  phase: Phase; p: number; checked: Flags; cleaned: Flags; bin: number; recycled: Record<string, number>; undone: Flags; ignored: Flags;
-  run: Run | null; queue: string[]; qi: number; step: number; ebb: Ebb; ebbIds: Flags; tc: number | null;
-  moved: Record<string, { d: string; gb: number }>; moving: string | null; movingTo: string; mp: number; paused: boolean; retried: boolean;
+  /** scan result from the disk service; null until the first load */
+  model: MapModel | null;
+  /** free space when the page opened, for the "清理前" mark on the free band */
+  free0: number | null;
+  phase: Phase; p: number; checked: Flags | null; undone: Flags; ignored: Flags;
+  run: Run | null; receiptId: string | null; queue: string[]; qi: number; step: number; ebb: Ebb; ebbIds: Flags; tc: number | null;
+  moving: string | null; movingTo: string; mp: number; paused: boolean;
   toEdits: Record<string, string>; verify: Flags; linkOff: Flags;
   overlay: Overlay; menu: { id: string; x: number; y: number; W: number; H: number } | null; detail: string | null; dOpen: boolean; moveId: string | null;
   editing: boolean; draft: string; mode: Mode; open: Record<string, boolean> | null; hover: string | null; pinned: string | null; focusCat: string | null;
@@ -50,8 +53,9 @@ interface MapState {
 }
 
 const INIT: MapState = {
-  phase: 'results', p: 100, checked: Object.fromEntries(DEFAULT_CHECKED.map((k) => [k, true])), cleaned: {}, bin: 9.6, recycled: {}, undone: {}, ignored: {},
-  run: null, queue: [], qi: 0, step: 0, ebb: null, ebbIds: {}, tc: null, moved: {}, moving: null, movingTo: 'D', mp: 0, paused: false, retried: false,
+  model: null, free0: null,
+  phase: 'results', p: 100, checked: null, undone: {}, ignored: {},
+  run: null, receiptId: null, queue: [], qi: 0, step: 0, ebb: null, ebbIds: {}, tc: null, moving: null, movingTo: 'D', mp: 0, paused: false,
   toEdits: {}, verify: {}, linkOff: {}, overlay: null, menu: null, detail: null, dOpen: false, moveId: null, editing: false, draft: '',
   mode: 'all', open: null, hover: null, pinned: null, focusCat: null, drag: null, confirm: false, lw: 320, mapW: NW, mapH: NH,
   rem: { low: true, weekly: false, inst: true }, frozen: null, seen: {},
@@ -70,30 +74,40 @@ function useMergeState<T extends object>(init: T) {
 
 export function MapPage() {
   const shell = useShell();
-  const { cFree: freeNow, setCFree, pushToast, setPal, pal, setTask, setWriting, setDFree, setSuggestN, setScanAt, appEl } = shell;
+  const { cFree: freeNow, sys, drives, refreshDrives, pushToast, setPal, pal, setTask, setWriting, setSuggestN, setScanAt, appEl } = shell;
   const [s, set, sref] = useMergeState(INIT);
-  const timer = useRef<number | null>(null), mtimer = useRef<number | null>(null), ebbT = useRef<number[]>([]);
+  const ebbT = useRef<number[]>([]);
   const mapEl = useRef<HTMLElement | null>(null);
   const mr = useRef<DOMRect | null>(null);
   const split = useRef<{ x: number; w: number } | null>(null);
   const [splitting, setSplitting] = useState(false);
+  const [openedAt] = useState(() => Date.now());
 
-  // ---------- model helpers (read the given state so timers can pass the latest)
-  const size = (id: string, st: MapState = s) => {
-    const L = LEAF[id];
-    if (L.move && st.moved[L.move]) return 0;
-    if (id === 'recycle') return st.bin;
-    if (st.cleaned[id]) return Math.max(0, L.gb - L.gain);
-    return L.gb;
+  // ---------- the model from the disk service
+  const model = s.model ?? EMPTY_MODEL;
+  const LEAVES: Leaf[] = model.leaves, CATS: Cat[] = model.cats, MOVES: Move[] = model.moves;
+  const LEAF: Record<string, Leaf> = Object.fromEntries(LEAVES.map((l) => [l.id, l]));
+  const TOTAL = model.drive.total, FREE30 = model.drive.free30, HIST30 = model.history30;
+  const FREE0 = s.free0 ?? freeNow;
+  const moveOf = (id: string | null) => MOVES.find((m) => m.id === id);
+  const reloadModel = async () => {
+    const m = await diskService.getMapModel(sys.id);
+    set({ model: m });
+    setScanAt(m.scannedAt || '尚未');
+    return m;
   };
-  const level = (id: string, st: MapState = s): MapLevel => { const L = LEAF[id]; return L.level === 'L2' && st.cleaned[id] && L.gb - L.gain > 0.05 ? 'L4' : L.level; };
-  const selectable = (id: string, st: MapState = s) => { const lv = level(id, st); return (lv === 'L1' || lv === 'L2' || lv === 'L3') && size(id, st) > 0.05 && !st.ignored[id] && !(st.cleaned[id] && id !== 'recycle'); };
-  const gain = (id: string, st: MapState = s) => { const L = LEAF[id]; if (id === 'recycle') return st.bin; return L.level === 'L2' ? L.gain : size(id, st); };
-  const moveGb = (m: Move, st: MapState = s) => m.cells.reduce((a, c) => a + size(c, st), 0);
-  const driveFree = (d: string, st: MapState = s) => (DRIVES[d] ? DRIVES[d].free - Object.keys(st.moved).filter((k) => st.moved[k].d === d).reduce((a, k) => a + st.moved[k].gb, 0) : 0);
-  const migratable = (id: string, st: MapState = s) => { const L = LEAF[id]; return !!L.move && !st.moved[L.move] && size(id, st) > 0.05; };
-  const items = (st: MapState = s): MapItems => Object.fromEntries(LEAVES.map((l) => [l.id, { id: l.id, v: size(l.id, st), level: level(l.id, st) }]));
-  const toggle = (id: string) => { if (!selectable(id)) return; set((p) => ({ checked: { ...p.checked, [id]: !p.checked[id] } })); };
+
+  // ---------- model helpers
+  const size = (id: string) => LEAF[id]?.gb ?? 0;
+  const level = (id: string): MapLevel => LEAF[id]?.level ?? 'L4';
+  const selectable = (id: string) => { const lv = level(id); return (lv === 'L1' || lv === 'L2' || lv === 'L3') && size(id) > 0.05 && !s.ignored[id] && !LEAF[id]?.cleaned; };
+  const gain = (id: string) => { const L = LEAF[id]; if (!L) return 0; if (L.act === 'empty') return L.gb; return L.level === 'L2' ? Math.min(L.gain, L.gb) : L.gb; };
+  const moveGb = (m: Move) => m.cells.reduce((a, c) => a + size(c), 0);
+  const driveFree = (d: string) => drives.find((x) => x.id === d)?.free ?? 0;
+  const migratable = (id: string) => { const L = LEAF[id]; return !!L?.move && !!moveOf(L.move) && size(id) > 0.05; };
+  const items = (): MapItems => Object.fromEntries(LEAVES.map((l) => [l.id, { id: l.id, v: size(l.id), level: level(l.id) }]));
+  const checked: Flags = s.checked ?? {};
+  const toggle = (id: string) => { if (!selectable(id)) return; set((p) => ({ checked: { ...(p.checked ?? {}), [id]: !(p.checked ?? {})[id] } })); };
   const target = (m: Move) => s.toEdits[m.id] || m.to;
 
   // ---------- overlay bus: one at a time; any overlay kills hover cards
@@ -117,87 +131,103 @@ export function MapPage() {
     else if (st.pinned || st.focusCat) set({ pinned: null, focusCat: null });
   });
 
-  // ---------- timers
-  const halt = () => { if (timer.current) { clearInterval(timer.current); timer.current = null; } ebbT.current.forEach((t) => clearTimeout(t)); ebbT.current = []; };
-  useEffect(() => () => { halt(); if (mtimer.current) clearInterval(mtimer.current); }, []); // eslint-disable-line react-hooks/exhaustive-deps
+  const halt = () => { ebbT.current.forEach((t) => clearTimeout(t)); ebbT.current = []; };
+  useEffect(() => () => { halt(); }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
-  const rescan = () => {
+  // ---------- scan
+  const rescan = async () => {
     halt(); setPal(false);
     set({ phase: 'scanning', p: 0, confirm: false, overlay: null, dOpen: false, pinned: null, hover: null, drag: null });
-    timer.current = window.setInterval(() => {
-      const st = sref.current, p = Math.min(100, st.p + 1.5);
-      if (p >= 100) {
-        halt(); set({ p: 100, phase: 'results' }); setScanAt('13:58');
-        const done = { ...st, p: 100 };
-        const v = LEAVES.filter((l) => selectable(l.id, done)).reduce((a, l) => a + gain(l.id, done), 0);
-        const mv = MOVES.filter((m) => !done.moved[m.id]).reduce((a, m) => a + moveGb(m, done), 0);
-        pushToast({ kind: 'ok', title: '扫描完成', sub: '可清理约 ' + v.toFixed(1) + ' GB · 可迁移 ' + mv.toFixed(1) + ' GB' }, 5000);
-      } else set({ p });
-    }, 90);
+    try {
+      const m = await diskService.scan(sys.id, (pr) => set({ p: pr.p }));
+      set({ model: m, p: 100, phase: 'results' });
+      setScanAt(m.scannedAt);
+      await refreshDrives();
+      const v = m.leaves.filter((l) => ['L1', 'L2', 'L3'].includes(l.level) && !l.cleaned && l.gb > 0.05).reduce((a, l) => a + (l.level === 'L2' ? Math.min(l.gain, l.gb) : l.gb), 0);
+      const mv = m.moves.reduce((a, mm) => a + mm.cells.reduce((x, c) => x + (m.leaves.find((l) => l.id === c)?.gb ?? 0), 0), 0);
+      pushToast({ kind: 'ok', title: '扫描完成', sub: '可清理约 ' + v.toFixed(1) + ' GB · 可迁移 ' + mv.toFixed(1) + ' GB' }, 5000);
+    } catch (e) {
+      set({ phase: 'results', p: 100 });
+      pushToast({ kind: 'err', title: '扫描没有完成', sub: String(e) }, 8000);
+    }
   };
+  const stopScan = () => { void diskService.cancelScan(); };
+
+  // first load: use the last scan, or scan now if there is none
+  useEffect(() => {
+    let live = true;
+    void diskService.getMapModel(sys.id).then((m) => {
+      if (!live) return;
+      set({ model: m, free0: m.drive.free, checked: Object.fromEntries(m.leaves.filter((l) => l.level === 'L1' && !l.cleaned && l.gb > 0.05).map((l) => [l.id, true])) });
+      if (m.scannedAt) setScanAt(m.scannedAt); else void rescan();
+    });
+    return () => { live = false; };
+  }, [sys.id]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // The ebb wash (~950 ms): blocks lift, a sea-glass wave rises dissolving them as its ridge passes,
   // then the dry-sand free band grows while the hero number, sidebar and top glow follow.
   const runClean = () => {
     halt();
     const st = sref.current;
-    const ids = Object.keys(st.checked).filter((id) => st.checked[id] && selectable(id, st)).sort((a, b) => RUN_ORDER.indexOf(LEAF[a].act) - RUN_ORDER.indexOf(LEAF[b].act));
+    const ids = Object.keys(checked).filter((id) => checked[id] && selectable(id)).sort((a, b) => RUN_ORDER.indexOf(LEAF[a].act) - RUN_ORDER.indexOf(LEAF[b].act));
     const ebbIds: Flags = Object.fromEntries(ids.map((id) => [id, true]));
-    set({ frozen: { items: items(st), free: freeNow }, phase: 'cleaning', queue: ids, qi: 0, step: 0, confirm: false, run: { ids: [], amt: {}, freed: 0, bin: 0 }, undone: {}, overlay: null, dOpen: false, hover: null, pinned: null, ebb: 'lift', ebbIds });
+    const job = diskService.clean(sys.id, ids);
+    set({ frozen: { items: items(), free: freeNow }, phase: 'cleaning', queue: ids, qi: 0, step: 0, confirm: false, run: { ids: [], amt: {}, freed: 0, bin: 0 }, receiptId: null, undone: {}, overlay: null, dOpen: false, hover: null, pinned: null, ebb: 'lift', ebbIds });
+    void st;
     const at = (ms: number, f: () => void) => { ebbT.current.push(window.setTimeout(f, ms)); };
     at(150, () => { set({ ebb: 'wave' }); sound.wash(false, 460); });
-    at(560, () => {
-      const cur = sref.current, run: Run = { ids: [], amt: {}, freed: 0, bin: 0 };
-      const up = { cleaned: { ...cur.cleaned }, recycled: { ...cur.recycled }, bin: cur.bin };
-      cur.queue.forEach((id) => {
-        const L = LEAF[id]; run.ids.push(id);
-        if (L.act === 'empty') { run.amt[id] = up.bin; run.freed += up.bin; up.bin = 0; }
-        else if (L.act === 'recycle') { const g = L.gb; run.amt[id] = g; run.bin += g; up.bin += g; up.recycled[id] = g; up.cleaned[id] = true; }
-        else { const g = L.actual; run.amt[id] = g; run.freed += g; up.cleaned[id] = true; }
-      });
-      setCFree((c) => c + run.freed);
-      set({ ...up, run, qi: cur.queue.length, step: 0, ebb: 'grow', frozen: null });
+    // apply the result once both the wave has risen (560 ms) and the backend has answered
+    const wave = new Promise<void>((r) => at(560, r));
+    void Promise.all([job, wave]).then(async ([rc]) => {
+      const run: Run = { ids: rc.items.map((i) => i.id), amt: Object.fromEntries(rc.items.map((i) => [i.id, i.gb])), freed: rc.freed, bin: rc.bin };
+      const m = await diskService.getMapModel(sys.id);
+      await refreshDrives();
+      set({ model: m, run, receiptId: rc.id, qi: sref.current.queue.length, step: 0, ebb: 'grow', frozen: null });
+      skippedToast(rc, pushToast);
+      at(390, () => set({ phase: 'report', checked: {}, ebb: null }));
+    }).catch((e) => {
+      set({ phase: 'results', ebb: null, frozen: null, ebbIds: {} });
+      pushToast({ kind: 'err', title: '清理没有完成', sub: String(e) }, 9000);
     });
-    at(950, () => set({ phase: 'report', checked: {}, ebb: null }));
   };
 
-  const undo = (id: string) => {
-    const st = sref.current, L = LEAF[id], run = { ...st.run! }, amt = run.amt[id];
-    const cleaned = { ...st.cleaned }; delete cleaned[id];
-    const up: Partial<MapState> = { undone: { ...st.undone, [id]: true }, cleaned, run };
-    if (L.act === 'recycle') { up.bin = Math.max(0, st.bin - amt); run.bin -= amt; const r = { ...st.recycled }; delete r[id]; up.recycled = r; }
-    else { setCFree((c) => c - amt); run.freed -= amt; }
-    set(up);
+  const undo = async (id: string) => {
+    const st = sref.current;
+    if (!st.receiptId || !st.run) return;
+    try {
+      await diskService.undo(st.receiptId, id);
+      const amt = st.run.amt[id], act = LEAF[id]?.act;
+      const run = { ...st.run, ...(act === 'recycle' ? { bin: st.run.bin - amt } : { freed: st.run.freed - amt }) };
+      set({ undone: { ...st.undone, [id]: true }, run });
+      await reloadModel(); await refreshDrives();
+    } catch (e) { pushToast({ kind: 'err', title: '没能撤销', sub: String(e) }, 8000); }
   };
 
-  const tickMove = () => {
-    if (mtimer.current) clearInterval(mtimer.current);
-    mtimer.current = window.setInterval(() => {
-      const st = sref.current;
-      if (st.paused || !st.moving) return;
-      const mp = st.mp + 2.5;
-      if (st.moving === 'm_ollama' && st.mp < 30 && mp >= 30 && !st.retried) {
-        set({ mp: 30, paused: true });
-        pushToast({ kind: 'err', title: 'Ollama 正在运行，迁移已暂停', sub: '退出 Ollama 后点重试，已复制的部分会保留', action: '重试', run: retry });
-        return;
-      }
-      if (mp >= 100) {
-        if (mtimer.current) clearInterval(mtimer.current); mtimer.current = null;
-        const m = moveOf(st.moving)!, g = moveGb(m, st);
-        const ck = { ...st.checked }; m.cells.forEach((c) => { delete ck[c]; });
-        setCFree((c) => c + g);
-        set({ moving: null, mp: 0, moved: { ...st.moved, [m.id]: { d: st.movingTo, gb: g } }, checked: ck });
-        pushToast({ kind: 'ok', title: m.name + '已迁移至 ' + st.movingTo + ':', sub: 'C: 多出 ' + g.toFixed(1) + ' GB', action: '打开新位置' }, 6000);
-      } else set({ mp });
-    }, 120);
-  };
-  const retry = () => { set({ paused: false, retried: true }); if (!mtimer.current) tickMove(); };
+  // ---------- migration: progress comes from the service
+  useEffect(() => diskService.onMigration((pr) => {
+    if (pr.state === 'running') set({ moving: pr.moveId, movingTo: pr.drive, mp: pr.pct, paused: false });
+    else if (pr.state === 'paused') {
+      set({ moving: pr.moveId, movingTo: pr.drive, mp: pr.pct, paused: true });
+      pushToast({ kind: 'err', title: pr.message ?? '迁移已暂停', sub: '处理好之后点重试，已复制并校验过的部分会保留', action: '重试', run: () => { set({ paused: false }); void diskService.resumeMigration(pr.moveId); } });
+    } else if (pr.state === 'done') {
+      const name = moveOf(pr.moveId)?.name ?? '';
+      set((p) => { const ck = { ...(p.checked ?? {}) }; (moveOf(pr.moveId)?.cells ?? []).forEach((c) => { delete ck[c]; }); return { moving: null, mp: 0, paused: false, checked: ck }; });
+      void reloadModel(); void refreshDrives();
+      pushToast({ kind: 'ok', title: name + '已迁移至 ' + pr.drive + ':', sub: sys.id + ': 多出 ' + pr.gb.toFixed(1) + ' GB', action: '打开新位置', run: () => { const m = moveOf(pr.moveId); if (m) void diskService.openPath(target(m)); } }, 6000);
+    } else {
+      set({ moving: null, mp: 0, paused: false });
+      pushToast({ kind: 'err', title: '迁移没有完成', sub: pr.message ?? '源文件夹保持原样，没有删除任何文件' }, 10000);
+    }
+  }), []); // eslint-disable-line react-hooks/exhaustive-deps
   const startMove = (to: string) => {
     const m = moveOf(sref.current.moveId);
     if (!m) return;
-    if (mtimer.current) clearInterval(mtimer.current);
-    set((p) => ({ moving: m.id, movingTo: driveOf(to) || 'D', toEdits: { ...p.toEdits, [m.id]: to }, mp: 0, paused: false, retried: false, overlay: null, editing: false }));
-    tickMove();
+    const st = sref.current;
+    set((p) => ({ moving: m.id, movingTo: driveOf(to) || 'D', toEdits: { ...p.toEdits, [m.id]: to }, mp: 0, paused: false, overlay: null, editing: false }));
+    diskService.startMigration(m.id, to, { link: !st.linkOff[m.id], verify: !!st.verify[m.id] }).catch((e) => {
+      set({ moving: null, mp: 0 });
+      pushToast({ kind: 'err', title: '迁移没有开始', sub: String(e) }, 9000);
+    });
   };
 
   // ---------- map size follows its element
@@ -217,8 +247,8 @@ export function MapPage() {
   const W = s.mapW || NW, H = s.mapH || NH;
   const its = isCleaning && s.frozen ? s.frozen.items : items();
   const shownFree = isCleaning && s.frozen ? s.frozen.free : freeNow;
-  const lay = layoutMap(W, H, shownFree, TOTAL, its);
-  const sel = LEAVES.filter((l) => s.checked[l.id] && selectable(l.id)).map((l) => l.id);
+  const lay = layoutMap(W, H, shownFree, TOTAL, its, CATS);
+  const sel = LEAVES.filter((l) => checked[l.id] && selectable(l.id)).map((l) => l.id);
   const selFree = isResults ? sel.filter((id) => LEAF[id].act !== 'recycle').reduce((a, id) => a + gain(id), 0) : 0;
   const selBin = isResults ? sel.filter((id) => LEAF[id].act === 'recycle').reduce((a, id) => a + gain(id), 0) : 0;
   const spot = isResults && s.confirm;
@@ -241,7 +271,7 @@ export function MapPage() {
     const tagW = tw(label, 11) + 18;
     const tx = clamp(X1 - tagW, 0, W - tagW);
     let ty = Y0 - 10 - 22;
-    const hitBoxes = ids.map((id) => lay.cells[id]).concat(LEAVES.filter((l) => s.checked[l.id]).map((l) => lay.cells[l.id])).filter(Boolean);
+    const hitBoxes = ids.map((id) => lay.cells[id]).concat(LEAVES.filter((l) => checked[l.id]).map((l) => lay.cells[l.id])).filter(Boolean);
     const covers = (y: number) => hitBoxes.some((q) => tx < q.x + q.w && tx + tagW > q.x && y < q.y + 22 && y + 22 > q.y)
       || Object.values(lay.sects).some((sc) => tx < sc.x + sc.w && tx + tagW > sc.x && y < sc.y + sc.hh && y + 22 > sc.y);
     if (ty < lay.free.h || covers(ty)) ty = Math.max(4, (lay.free.h - 22) / 2);
@@ -263,7 +293,7 @@ export function MapPage() {
   // during a scan a thin sounding beam descends the map; blocks light up once the beam has passed their upper third
   const pending = (id: string) => { if (!isScanning) return false; const b = lay.cells[id]; return b && b.w > 0 ? b.y + b.h * 0.35 > H * s.p / 100 : s.p < LEAF[id].rv; };
   const dimFor = (id: string) => {
-    if (spot) return !s.checked[id] || !selectable(id);
+    if (spot) return !checked[id] || !selectable(id);
     if (s.focusCat && LEAF[id].cat !== s.focusCat) return true;
     if (mode === 'clean') return !selectable(id);
     if (mode === 'move') return !migratable(id);
@@ -285,7 +315,7 @@ export function MapPage() {
     const id = l.id, b = lay.cells[id];
     const gone = !b || !!b.merged || its[id].v <= 0.05;
     const lv = level(id);
-    const on = (isResults && !!s.checked[id] && selectable(id)) || !!hit[id];
+    const on = (isResults && !!checked[id] && selectable(id)) || !!hit[id];
     const sz = its[id].v, mv = !!movingCells[id];
     const pend = pending(id) && !gone;
     if (isScanning && !gone && !pend && lv !== 'L4') { found.n += 1; found.gb += sz; }
@@ -322,7 +352,7 @@ export function MapPage() {
     const key = 'cl:' + c.id + ':' + lvk, b = lay.clusters[key];
     const mem = b ? b.members! : [];
     const selM = mem.filter((m) => selectable(m));
-    const onM = selM.filter((m) => (isResults && s.checked[m]) || hit[m]);
+    const onM = selM.filter((m) => (isResults && checked[m]) || hit[m]);
     const all = onM.length > 0 && onM.length === selM.length, part = onM.length > 0 && !all;
     const gb = mem.reduce((a, m) => a + its[m].v, 0), onGb = onM.reduce((a, m) => a + gain(m), 0);
     const nmL = (lvk === 'L1' && c.cl ? c.cl : '其他') + ' ×' + mem.length, nmS = '其他 ×' + mem.length;
@@ -384,7 +414,7 @@ export function MapPage() {
         const c = CATS.find((k) => k.id === cardId.split(':')[1])!, lv = b.lv!;
         hc = { ...base, sw: 'sw-' + lv, lvl: LVL[lv] + ' · ' + c.name + ' · 小项合并', name: (lv === 'L1' && c.cl ? c.cl : '其他') + ' ×' + mem.length,
           gbText: mem.reduce((a, m) => a + size(m), 0).toFixed(1) + ' GB', hint: s.pinned ? '勾选加入清理，点名称看详情' : '点击固定，逐项勾选',
-          members: mem.map((m) => ({ id: m, name: LEAF[m].name, size: size(m).toFixed(1), sw: 'sw-' + level(m), canCheck: selectable(m), checked: !!s.checked[m], locked: !s.pinned })) };
+          members: mem.map((m) => ({ id: m, name: LEAF[m].name, size: size(m).toFixed(1), sw: 'sw-' + level(m), canCheck: selectable(m), checked: !!checked[m], locked: !s.pinned })) };
       } else {
         const L = LEAF[cardId], lv = level(cardId), mm = L.move ? moveOf(L.move) : null;
         hc = { ...base, sw: 'sw-' + lv, lvl: LVL[lv], name: L.name,
@@ -402,17 +432,17 @@ export function MapPage() {
     return { L, sw: 'sw-' + lv, lvl: LVL[lv],
       gbText: (lv === 'L2' && L.gain < size(dId) - 0.05 ? '可腾出 ' + L.gain.toFixed(1) + ' / ' : '') + size(dId).toFixed(1) + ' GB',
       hasAct: L.act !== 'keep' && selectable(dId), canMove: migratable(dId) && s.moving !== L.move, moveGb: mm ? moveGb(mm).toFixed(1) : '', moveHow: mm ? mm.how : '',
-      canSelect: selectable(dId) && isResults, selLabel: s.checked[dId] ? '移出清理' : lv === 'L1' ? '加入清理' : '确认并加入清理' };
+      canSelect: selectable(dId) && isResults, selLabel: checked[dId] ? '移出清理' : lv === 'L1' ? '加入清理' : '确认并加入清理' };
   })() : null;
 
   // list groups
   const lvIds = (lv: MapLevel) => LEAVES.filter((l) => level(l.id) === lv && selectable(l.id)).map((l) => l.id);
   const l1 = lvIds('L1'), l2 = lvIds('L2'), l3 = lvIds('L3');
-  const mvs = MOVES.filter((m) => !s.moved[m.id] && moveGb(m) > 0.05);
+  const mvs = MOVES.filter((m) => moveGb(m) > 0.05);
   const keep = LEAVES.filter((l) => level(l.id) === 'L4' && size(l.id) > 0.05 && !migratable(l.id)).map((l) => l.id);
   const open = s.open || { L1: true, L2: false, L3: true, mv: false, keep: false };
   const sum = (ids: string[], f: (id: string) => number) => ids.reduce((a, id) => a + f(id), 0);
-  const allOn = l1.length > 0 && l1.every((id) => s.checked[id]);
+  const allOn = l1.length > 0 && l1.every((id) => checked[id]);
   type Group = { key: string; sw: string; arrow?: boolean; title: string; meta: string; kind: 'check' | 'move' | 'keep'; ids?: string[]; label?: boolean; emptyText: string; all?: () => void; allLabel?: string };
   let groups: Group[] = [
     { key: 'L1', sw: 'sw-L1', title: '可重建', meta: l1.length + ' 项 · ' + sum(l1, (id) => gain(id)).toFixed(1), kind: 'check', ids: l1, label: true, emptyText: '都清干净了',
@@ -441,7 +471,7 @@ export function MapPage() {
     const c1 = [p1[0] + (p2[0] - p0[0]) / 6, p1[1] + (p2[1] - p0[1]) / 6], c2 = [p2[0] - (p3[0] - p1[0]) / 6, p2[1] - (p3[1] - p1[1]) / 6];
     tline += ' C' + c1[0].toFixed(1) + ' ' + c1[1].toFixed(2) + ' ' + c2[0].toFixed(1) + ' ' + c2[1].toFixed(2) + ' ' + p2[0].toFixed(1) + ' ' + p2[1].toFixed(2);
   }
-  const tday = (i: number) => { const d = new Date(2026, 9, 23 + i); return (d.getMonth() + 1) + '月' + String(d.getDate()).padStart(2, '0') + '日'; };
+  const tday = (i: number) => { const d = new Date(openedAt - (tN - i) * 86400000); return (d.getMonth() + 1) + '月' + String(d.getDate()).padStart(2, '0') + '日'; };
   const tdesc = (i: number) => { const v = tvals[i], dv = i > 0 ? v - tvals[i - 1] : 0;
     return tday(i) + ' · 可用 ' + v.toFixed(1) + 'G' + (TEV[i] ? ' · ' + TEV[i] : Math.abs(dv) >= 0.05 ? ' · 当日 ' + (dv > 0 ? '+' : '−') + Math.abs(dv).toFixed(1) + 'G' : ''); };
   const tc = s.tc === null ? null : clamp(s.tc, 0, tN);
@@ -455,18 +485,18 @@ export function MapPage() {
   const mvO = ov === 'move' ? moveOf(s.moveId) : undefined;
   const mv = mvO ? (() => {
     const to = s.editing ? s.draft : target(mvO);
-    const d = driveOf(to), info = DRIVES[d], g = moveGb(mvO), dfree = info ? driveFree(d) : 0;
+    const d = driveOf(to), info = drives.find((x) => x.id === d), g = moveGb(mvO), dfree = info ? driveFree(d) : 0;
     let err = '';
     if (!d) err = '请输入完整路径，例如 D:\\' + mvO.name;
-    else if (d === 'C') err = '目标仍在 C:，不会腾出空间';
+    else if (d === sys.id) err = '目标仍在 ' + sys.id + ':，不会腾出空间';
     else if (!info) err = '找不到 ' + d + ':，请先连接这块磁盘';
     else if (dfree < g) err = d + ': 剩余空间不足';
     return { m: mvO, to: target(mvO), drive: d ? d + ':' : '新位置', gbText: g.toFixed(1), after: info ? (dfree - g).toFixed(0) : '—', err, steps: mvO.steps.map((t) => t.replace('{to}', to || '新位置')) };
   })() : null;
 
   const ctaN = dg ? dg.n + nSel - sel.filter((id) => hit[id]).length : nSel;
-  const ctaGb = dg ? selFree + Object.keys(hit).filter((id) => !s.checked[id]).reduce((a, id) => a + gain(id), 0) : selFree;
-  const atmo = atmoOf(shownFree);
+  const ctaGb = dg ? selFree + Object.keys(hit).filter((id) => !checked[id]).reduce((a, id) => a + gain(id), 0) : selFree;
+  const atmo = atmoOf(shownFree, TOTAL);
   // remember where each block was drawn, so a block that disappears can collapse toward that spot
   const seenSig = Object.entries(seenNow).map(([k, b]) => k + ':' + b.x.toFixed(1) + ',' + b.y.toFixed(1) + ',' + b.w.toFixed(1) + ',' + b.h.toFixed(1)).join('|');
   useEffect(() => { set((p) => ({ seen: { ...p.seen, ...seenNow } })); }, [seenSig]); // eslint-disable-line react-hooks/exhaustive-deps
@@ -486,11 +516,9 @@ export function MapPage() {
     } else if (owned.current) { owned.current = false; setTask(null); }
   }, [taskKey]); // eslint-disable-line react-hooks/exhaustive-deps
   useEffect(() => { setWriting(s.moving && !s.paused ? { [s.movingTo]: true } : {}); }, [s.moving, s.paused, s.movingTo, setWriting]);
-  const dFreeNow = driveFree('D');
-  useEffect(() => { setDFree(dFreeNow); }, [dFreeNow, setDFree]);
   const suggestN = l1.length + l2.length + l3.length;
   useEffect(() => { setSuggestN(suggestN); }, [suggestN, setSuggestN]);
-  useEffect(() => () => { setSuggestN(null); setWriting({}); if (owned.current) setTask(null); }, [setSuggestN, setWriting, setTask]);
+  useEffect(() => () => { void refreshDrives(); setWriting({}); if (owned.current) setTask(null); }, [refreshDrives, setWriting, setTask]);
 
   // ---------- marquee + splitter pointer handlers
   const mDown = (e: RPointerEvent<HTMLElement>) => {
@@ -542,7 +570,7 @@ export function MapPage() {
     } else {
       const L = LEAF[id];
       title = L.name + ' · ' + size(id).toFixed(1) + ' GB';
-      if (selectable(id)) add(s.checked[id] ? '移出清理' : '加入清理', '空格', () => { toggle(id); done(); });
+      if (selectable(id)) add(checked[id] ? '移出清理' : '加入清理', '空格', () => { toggle(id); done(); });
       add('查看详情', 'Enter', () => openDetail(id));
       if (migratable(id) && s.moving !== L.move) add('迁移…', '', () => openMove(L.move));
       sep();
@@ -551,7 +579,7 @@ export function MapPage() {
       if (selectable(id)) {
         sep();
         add('忽略这一项', '', () => {
-          const ck = { ...s.checked }; delete ck[id];
+          const ck = { ...checked }; delete ck[id];
           set({ ignored: { ...s.ignored, [id]: true }, checked: ck, overlay: null, menu: null });
           pushToast({ kind: 'ok', title: '已忽略「' + L.name + '」', sub: '以后不再建议清理它', action: '撤销',
             run: () => set((p) => { const ig = { ...p.ignored }; delete ig[id]; return { ignored: ig }; }) }, 6000);
@@ -567,10 +595,10 @@ export function MapPage() {
   const rowSize = (id: string) => (LEAF[id].level === 'L2' ? LEAF[id].gain : size(id)).toFixed(1);
 
   return (
-    <Shell path={PATHS.map} palette={<MapPalette s={s} set={set} close={() => setPal(false)} level={level} size={size} selectable={selectable} moveGb={moveGb}
-      setMode={setMode} rescan={rescan} openDetail={openDetail} openMove={openMove} openBell={() => openOverlay('bell')} />}>
+    <Shell path={PATHS.map} palette={<MapPalette checked={checked} leaves={LEAVES} cats={CATS} moves={MOVES} sysId={sys.id} set={set} close={() => setPal(false)} level={level} size={size} selectable={selectable} moveGb={moveGb}
+      setMode={setMode} rescan={() => void rescan()} openDetail={openDetail} openMove={openMove} openBell={() => openOverlay('bell')} />}>
       <div className="hdr">
-        <nav aria-label="位置" className="crumb"><span className="muted">C: 系统盘</span><span className="muted" aria-hidden="true">/</span><span>空间地图</span></nav>
+        <nav aria-label="位置" className="crumb"><span className="muted">{sys.id}: {sys.name}</span><span className="muted" aria-hidden="true">/</span><span>空间地图</span></nav>
         <Seg label="地图显示" value={mode} onPick={setMode} items={segItems} />
         <span style={{ flex: '1 1 auto' }} />
         <span className={'atmo-tag t-' + atmo} role="status"><i aria-hidden="true" />{ATMO_TEXT[atmo]}</span>
@@ -593,7 +621,7 @@ export function MapPage() {
             </section>
           )}
         </span>
-        <button type="button" className="btn btn-sm" onClick={rescan} disabled={isScanning || isCleaning}><Icon name="rescan" size={14} />重新扫描</button>
+        <button type="button" className="btn btn-sm" onClick={() => void rescan()} disabled={isScanning || isCleaning}><Icon name="rescan" size={14} />重新扫描</button>
       </div>
 
       <div style={{ position: 'relative', flex: '1 1 auto', minBlockSize: 0, display: 'flex', gap: '1.25rem', padding: '1.25rem' }}>
@@ -622,14 +650,14 @@ export function MapPage() {
                 <path d={tline + ' L300 44 L0 44 Z'} fill="url(#tm19a)" />
                 <path d={tline} fill="none" stroke="url(#tm19l)" strokeWidth="1.5" vectorEffect="non-scaling-stroke" strokeLinejoin="round" />
               </svg>
-              <span className="tm-ref" style={{ top: (tpy(FREE30) / 44 * 100).toFixed(2) + '%' }} aria-hidden="true"><span className="mono">30 天前 87G</span></span>
+              <span className="tm-ref" style={{ top: (tpy(FREE30) / 44 * 100).toFixed(2) + '%' }} aria-hidden="true"><span className="mono">30 天前 {Math.round(tvals[0])}G</span></span>
               {tc !== null && <>
                 <span className="tm-cur" style={{ left: (tc / tN * 100).toFixed(2) + '%' }} aria-hidden="true" />
                 <span className="tm-dot" style={{ left: (tc / tN * 100).toFixed(2) + '%', top: (tpy(tvals[tc]) / 44 * 100).toFixed(2) + '%' }} aria-hidden="true" />
               </>}
             </div>
             <div className="tm-cap" aria-hidden="true"><span className={cx('tm-t', tc === null && 'on')}>30天前 87G → 今日 {Math.round(freeNow)}G</span><span className={cx('tm-t mono', tc !== null && 'on')}>{tc === null ? '' : tdesc(tc)}</span></div>
-            <div className="capbar" role="img" aria-label={`C: 已用 ${used.toFixed(1)} GB，共 512 GB；30 天前已用 425 GB`}>
+            <div className="capbar" role="img" aria-label={`${sys.id}: 已用 ${used.toFixed(1)} GB，共 ${Math.round(TOTAL)} GB；30 天前已用 ${Math.round(TOTAL - FREE30)} GB`}>
               <span className="cb-used" style={{ flex: '0 0 ' + pc(Math.max(0, used - selFree), TOTAL) }} /><span className="cb-gain" style={{ flex: '0 0 ' + pc(selFree, TOTAL) }} /><span className="cb-tide" style={{ left: pc(used30, TOTAL) }} />
             </div>
             <div className="cb-cap"><span className="mono">已用 {used.toFixed(1)} / 512 GB</span><span className="tide"><i />30 天前</span></div>
@@ -654,12 +682,12 @@ export function MapPage() {
                       {isOpen && <>
                         {g.kind === 'check' && g.ids!.map((id) => g.label ? (
                           <label key={id} className={rowCls(id)} onMouseEnter={() => set({ hover: id })} onMouseLeave={unhover} onContextMenu={ctxHandler(id)}>
-                            <span className="cbx"><input type="checkbox" className="cbx-in" checked={!!s.checked[id]} onChange={() => toggle(id)} /><span className="cbx-box" aria-hidden="true"><Icon name="check" size={10} /></span></span>
+                            <span className="cbx"><input type="checkbox" className="cbx-in" checked={!!checked[id]} onChange={() => toggle(id)} /><span className="cbx-box" aria-hidden="true"><Icon name="check" size={10} /></span></span>
                             <span className="nm">{LEAF[id].name}</span><span className="mono">{rowSize(id)}</span>
                           </label>
                         ) : (
                           <div key={id} className={rowCls(id)} onMouseEnter={() => set({ hover: id })} onMouseLeave={unhover} onContextMenu={ctxHandler(id)}>
-                            <span className="cbx"><input type="checkbox" className="cbx-in" aria-label={LEAF[id].name} checked={!!s.checked[id]} onChange={() => toggle(id)} /><span className="cbx-box" aria-hidden="true"><Icon name="check" size={10} /></span></span>
+                            <span className="cbx"><input type="checkbox" className="cbx-in" aria-label={LEAF[id].name} checked={!!checked[id]} onChange={() => toggle(id)} /><span className="cbx-box" aria-hidden="true"><Icon name="check" size={10} /></span></span>
                             <button type="button" className="lnk" onClick={() => openDetail(id)}><span className="nm">{LEAF[id].name}</span>{level(id) === 'L3' && <span className="l3tag">不可恢复</span>}</button>
                             <span className="mono">{rowSize(id)}</span>
                           </div>
@@ -732,7 +760,7 @@ export function MapPage() {
               {[62, 48, 70, 40, 56].map((w) => <div key={w} style={{ display: 'flex', gap: '0.625rem', alignItems: 'center' }}><span className="skel" style={{ inlineSize: '1rem', blockSize: '1rem' }} /><span className="skel" style={{ inlineSize: w + '%' }} /><span style={{ flex: '1 1 auto' }} /><span className="skel" style={{ inlineSize: '2.25rem' }} /></div>)}
             </div>
             <div style={{ flex: '1 1 auto' }} />
-            <div className="cta"><button type="button" className="btn" onClick={() => { halt(); set({ phase: 'results', p: 100 }); }}>停止扫描</button></div>
+            <div className="cta"><button type="button" className="btn" onClick={stopScan}>停止扫描</button></div>
           </>}
 
           {isCleaning && <>
@@ -755,7 +783,7 @@ export function MapPage() {
           {isReport && <>
             <div className="sbw" style={{ flex: '0 1 auto', marginTop: '1.5rem', ['--sbh' as string]: '48px' }}>
               <section className="sbs" aria-label="清理收据" style={{ display: 'grid', alignContent: 'start', minBlockSize: 0, overflowY: 'auto' }}>
-                <div className="muted" style={{ fontSize: '0.75rem' }}>清理完成 · 13:52 重新测量</div>
+                <div className="muted" style={{ fontSize: '0.75rem' }}>清理完成 · {hhmm()} 重新测量</div>
                 <dl style={{ margin: '0.5rem 0 0.75rem' }}>
                   <div className="rc-row"><dt>已释放磁盘空间</dt><dd className="mono" style={{ fontSize: '1.25rem', fontWeight: 500, color: 'var(--tide)' }}>{run.freed.toFixed(1)} GB</dd></div>
                   {run.freed >= 0.5 && <p className="rc-human">{(() => { const f = run.freed, n7 = Math.floor(f / 4.4), days = Math.round(f / (43.2 / 30)); return (n7 >= 1 ? '够再装 ' + n7 + ' 个 7B 本地模型（每个约 4.4 GB），' : '') + '约抵消 C: 过去 ' + days + ' 天的空间增长'; })()}</p>}
@@ -769,7 +797,7 @@ export function MapPage() {
                       <span style={{ display: 'grid', minInlineSize: 0 }}><span className="ellipsis">{LEAF[id].name}</span><span className="muted ellipsis" style={{ fontSize: '0.6875rem' }}>{und ? '已' + (a === 'setting' ? '还原' : '撤销') : ALABEL[a] + (id === 'temp' ? ' · 跳过 3 个正在使用的文件' : '')}</span></span>
                       <span style={{ display: 'inline-flex', alignItems: 'baseline', gap: '0.625rem' }}>
                         <span className="mono" style={{ fontSize: '0.75rem' }}>{und ? '—' : run.amt[id].toFixed(1)}</span>
-                        {(a === 'recycle' || a === 'setting') && !und && <button type="button" className="link-btn" style={{ fontSize: '0.75rem' }} onClick={() => undo(id)}>{a === 'setting' ? '还原' : '撤销'}</button>}
+                        {(a === 'recycle' || a === 'setting') && !und && <button type="button" className="link-btn" style={{ fontSize: '0.75rem' }} onClick={() => void undo(id)}>{a === 'setting' ? '还原' : '撤销'}</button>}
                       </span>
                     </div>
                   );
@@ -949,23 +977,24 @@ export function MapPage() {
 
 // ---------- Ctrl K on the map: commands, categories and folders, with ↑↓ Enter
 interface PalProps {
-  s: MapState; set: (p: Partial<MapState>) => void; close: () => void;
+  checked: Flags; leaves: Leaf[]; cats: Cat[]; moves: Move[]; sysId: string;
+  set: (p: Partial<MapState>) => void; close: () => void;
   level: (id: string) => MapLevel; size: (id: string) => number; selectable: (id: string) => boolean; moveGb: (m: Move) => number;
   setMode: (k: Mode) => void; rescan: () => void; openDetail: (id: string) => void; openMove: (id: string) => void; openBell: () => void;
 }
-function MapPalette({ s, set, close, level, size, selectable, moveGb, setMode, rescan, openDetail, openMove, openBell }: PalProps) {
+function MapPalette({ checked, leaves: LEAVES, cats: CATS, moves: MOVES, sysId, set, close, level, size, selectable, moveGb, setMode, rescan, openDetail, openMove, openBell }: PalProps) {
   const [q, setQ] = useState('');
   const [pi, setPi] = useState(0);
   const qq = q.trim().toLowerCase();
   const hit = (t: string) => !qq || t.toLowerCase().includes(qq);
   type Row = { icls: string; label: string; meta: string; kw?: string; run: () => void };
   const cmds: Row[] = [
-    { icls: 'sw10 sw-L1', label: '选中全部「可重建」项', meta: '', kw: '清理 全部 可重建 缓存 clean', run: () => { const c = { ...s.checked }; LEAVES.forEach((l) => { if (level(l.id) === 'L1' && selectable(l.id)) c[l.id] = true; }); set({ checked: c }); close(); } },
+    { icls: 'sw10 sw-L1', label: '选中全部「可重建」项', meta: '', kw: '清理 全部 可重建 缓存 clean', run: () => { const c = { ...checked }; LEAVES.forEach((l) => { if (level(l.id) === 'L1' && selectable(l.id)) c[l.id] = true; }); set({ checked: c }); close(); } },
     { icls: 'sw10 sw-L2', label: '只看可清理', meta: '', kw: '只看 可清理 筛选', run: () => setMode('clean') },
     { icls: 'sw10 sw-L4', label: '只看可迁移', meta: '', kw: '只看 可迁移 迁移 move', run: () => setMode('move') },
-    { icls: 'sw10 sw-L4', label: '重新扫描 C:', meta: '', kw: '扫描 rescan', run: rescan },
+    { icls: 'sw10 sw-L4', label: '重新扫描 ' + sysId + ':', meta: '', kw: '扫描 rescan', run: rescan },
     { icls: 'sw10 sw-L4', label: '空间提醒设置', meta: '', kw: '提醒 通知', run: openBell },
-    ...MOVES.filter((m) => !s.moved[m.id] && moveGb(m) > 0.05).map((m) => ({ icls: 'sw10 sw-L4', label: '迁移「' + m.name + '」…', meta: moveGb(m).toFixed(1) + ' GB', kw: '迁移 move ' + m.name, run: () => openMove(m.id) })),
+    ...MOVES.filter((m) => moveGb(m) > 0.05).map((m) => ({ icls: 'sw10 sw-L4', label: '迁移「' + m.name + '」…', meta: moveGb(m).toFixed(1) + ' GB', kw: '迁移 move ' + m.name, run: () => openMove(m.id) })),
   ];
   const sections: [string, Row[]][] = [
     ['操作', cmds.filter((c) => hit(c.label + ' ' + c.kw))],

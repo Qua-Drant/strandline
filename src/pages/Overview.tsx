@@ -1,6 +1,10 @@
-import { useEffect, useRef } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { Icon } from '../components/Icon';
-import { C_FREE_0, FOAM, freed90 } from '../data/history';
+import { freed90 } from '../lib/history';
+import { diskService } from '../services/diskService';
+import type { EventKind } from '../services/types';
+import { useData } from '../services/useData';
+import { skippedToast } from '../services/receipts';
 import { sound } from '../lib/sound';
 import { ATMO_TEXT, atmoOf, cx, pct } from '../lib/util';
 import { Link } from '../components/Link';
@@ -8,15 +12,9 @@ import { PATHS } from '../routes';
 import { PageHeader, Scroll } from '../shell/parts';
 import { useShell } from '../shell/context';
 
-const DISKS: [string, string, number, number, number][] = [['C', '系统盘', 512, 44.0, 87.2], ['D', '数据盘', 1000, 388.0, 401.5], ['E', '移动硬盘', 965, 637.0, 637.0]];
-const GROW: [string, string, number][] = [['微信聊天原图与视频', 'L4', 12.4], ['Docker WSL 磁盘', 'L2', 9.8], ['Sentinel-2 2023', 'L4', 8.0], ['pip 缓存', 'L1', 4.6], ['浏览器缓存', 'L1', 3.1], ['临时文件', 'L1', 2.6], ['其他 11 项', 'L4', 2.7]];
-type Act = [time: string, kind: string, color: string, title: string, amount: string];
-const ACTS: Act[] = [
-  ['13:52', '扫描', 'var(--line-2)', '扫描 C: · 41.2 万个文件 · 1 分 04 秒', '468 GB'],
-  ['09:00', '整理', 'var(--l2)', '规则「安装包装好 30 天后移入回收站」· 3 个文件', '1.1 GB'],
-  ['10/18', '清理', 'var(--l1)', '常规清理 6 项 · 可重建缓存与回收站', '18.6 GB'],
-];
-const RULES_ON: [string, string][] = [['安装包装好 30 天后移入回收站', '每天'], ['截图按月归档', '新文件出现时'], ['论文 PDF 归档', '新文件出现时']];
+const KIND_UI: Record<EventKind, [string, string]> = { scan: ['扫描', 'var(--line-2)'], rule: ['整理', 'var(--l2)'], clean: ['清理', 'var(--l1)'], move: ['迁移', 'var(--l4)'] };
+const WEEK = ['日', '一', '二', '三', '四', '五', '六'];
+const greeting = () => { const h = new Date().getHours(); return h < 5 ? '夜深了' : h < 11 ? '早上好' : h < 13 ? '中午好' : h < 18 ? '下午好' : '晚上好'; };
 
 /** Smiling beachcomber with a cup of tea; cheers up after the one-tap clean. */
 function HelloArt() {
@@ -48,79 +46,107 @@ function HelloArt() {
 }
 
 export function Overview() {
-  const { cFree: cf, setCFree, foam, setFoam, task, startTask, pushToast } = useShell();
+  const { cFree: cf, sys, drives, foam, setFoam, setTask, task, pushToast, refreshDrives } = useShell();
   const timers = useRef<number[]>([]);
   useEffect(() => () => timers.current.forEach((t) => clearTimeout(t)), []);
+  const key = sys.id + ':' + cf.toFixed(2);
+  const [rows, reloadRows] = useData(() => diskService.getSuggestions(sys.id), key);
+  const [model] = useData(() => diskService.getMapModel(sys.id), key);
+  const [ov] = useData(() => diskService.getOverview(sys.id), key);
+  const [hist] = useData(() => diskService.getHistory(sys.id), key);
+  const [settings] = useData(() => diskService.getSettings());
 
-  const fdone = foam === 2;
-  const atmo = atmoOf(cf);
+  const live = (rows ?? []).filter((r) => !r.done);
+  const sumL = (lv: string) => live.filter((r) => r.level === lv).reduce((a, r) => a + r.gain, 0);
+  const foamRows = (rows ?? []).filter((r) => ov?.foamIds.includes(r.id));
+  const foamGb = foamRows.filter((r) => !r.done).reduce((a, r) => a + r.gain, 0);
+  const foamFreed = foamRows.filter((r) => r.done).reduce((a, r) => a + r.gain, 0);
+  const fdone = foam === 2 || (foamRows.length > 0 && foamRows.every((r) => r.done));
+  const atmo = atmoOf(cf, sys.total);
   const atmoText = ATMO_TEXT[atmo];
   const cfi = Math.floor(cf + 1e-6), cfd = Math.round((cf - cfi) * 10) % 10;
+  const [today] = useState(() => new Date());
 
-  const foamGo = () => {
-    if (foam) return;
+  const foamGo = async () => {
+    if (foam || !ov) return;
     setFoam(1);
     sound.wash(false, 560);
-    timers.current.push(window.setTimeout(() => setCFree(C_FREE_0 + FOAM), 240));
+    const rc = await diskService.clean(sys.id, ov.foamIds.filter((id) => live.some((r) => r.id === id)));
+    timers.current.push(window.setTimeout(() => { void refreshDrives(); void reloadRows(); }, 240));
     timers.current.push(window.setTimeout(() => setFoam(2), 600));
+    skippedToast(rc, pushToast);
   };
-  const rescan = () => startTask('扫描 3 块磁盘', '索引文件系统…', () => pushToast({ kind: 'ok', title: '扫描完成', sub: 'C: 468 GB · D: 612 GB · E: 328 GB 已用' }, 5000), true);
+  const rescan = async () => {
+    const t0 = Date.now();
+    await diskService.scan(sys.id, (p) => setTask({ title: '扫描 ' + sys.id + ':', note: (p.phase === 'index' ? '索引文件系统' : '识别应用缓存') + '…', p: p.p, scan: true }));
+    setTask(null); await refreshDrives();
+    pushToast({ kind: 'ok', title: '扫描完成', sub: drives.map((d) => d.id + ': ' + Math.round(d.total - d.free) + ' GB').join(' · ') + ' 已用 · ' + Math.round((Date.now() - t0) / 1000) + ' 秒' }, 5000);
+  };
 
-  const cleanable = fdone ? '74.3' : '99.5';
-  const [k1, k2, k3] = [fdone ? '14.8' : '40.0', '49.9', '9.6'];
+  const k1 = sumL('L1'), k2 = sumL('L2'), k3 = sumL('L3');
+  const cleanable = (k1 + k2 + k3).toFixed(1);
+  const moves = model?.moves ?? [];
+  const mvGb = moves.reduce((a, m) => a + m.cells.reduce((x, c) => x + (model!.leaves.find((l) => l.id === c)?.gb ?? 0), 0), 0);
+  const others = drives.filter((d) => d.id !== sys.id).map((d) => d.id + ':').join(' 或 ');
   const kinds: [string, string, number, string, string][] = [
-    ['L1', '可重建', fdone ? 2 : 8, '删了会自动重建', k1], ['L2', '需审阅', 5, '看一眼再决定，有的会改系统设置', '49.9'],
-    ['L3', '不可恢复', 1, '回收站，清空后找不回', '9.6'], ['mv', '可迁移', 7, '搬到 D: 或 E:，C: 才真正宽裕', '256.0'],
+    ['L1', '可重建', live.filter((r) => r.level === 'L1').length, '删了会自动重建', k1.toFixed(1)],
+    ['L2', '需审阅', live.filter((r) => r.level === 'L2').length, '看一眼再决定，有的会改系统设置', k2.toFixed(1)],
+    ['L3', '不可恢复', live.filter((r) => r.level === 'L3').length, '回收站，清空后找不回', k3.toFixed(1)],
+    ['mv', '可迁移', moves.length, others ? '搬到 ' + others + '，' + sys.id + ': 才真正宽裕' : '搬到其他磁盘', mvGb.toFixed(1)],
   ];
-  const acts: Act[] = fdone ? [['刚刚', '清理', 'var(--l1)', '一键清理 6 项缓存', '25.2 GB'] as Act].concat(ACTS.slice(0, 2)) : ACTS;
+  const acts = (ov?.recent ?? []).map(([time, kind, title, amount]) => [time, KIND_UI[kind][0], KIND_UI[kind][1], title, amount] as const);
+  const growers = ov?.growers ?? [];
+  const growMax = Math.max(0.1, ...growers.map((g) => g.gb));
+  const freedTotal = hist ? freed90(hist) : 0;
+  const lowText = settings?.low ? '已开启' : '未开启';
 
   return (
     <>
       <PageHeader crumb={['概览']}>
-        <button type="button" className="btn btn-sm" onClick={rescan} disabled={!!task}><Icon name="rescan" size={14} />重新扫描全部磁盘</button>
+        <button type="button" className="btn btn-sm" onClick={() => void rescan()} disabled={!!task}><Icon name="rescan" size={14} />重新扫描全部磁盘</button>
       </PageHeader>
       <Scroll className="pg ov2" style={{ paddingTop: '0.75rem' }}>
         <div className="ov-fold">
           <header className={cx('hello', fdone && 'is-happy', foam === 1 && 'is-busy')}>
             <div className="hello-t">
-              <p className="eyebrow">11 月 21 日 · 星期六</p>
-              <h1 className="hello-h">{fdone ? '下午好，C 盘腾出了 25.2 GB' : '下午好，C 盘快满了'}</h1>
+              <p className="eyebrow">{today.getMonth() + 1} 月 {today.getDate()} 日 · 星期{WEEK[today.getDay()]}</p>
+              <h1 className="hello-h">{fdone ? greeting() + '，' + sys.id + ' 盘腾出了 ' + foamFreed.toFixed(1) + ' GB' : greeting() + '，' + sys.id + (atmo === 'lo' ? ' 盘空间充足' : ' 盘快满了')}</h1>
               <p className="hello-s">{fdone
-                ? '清掉 6 项会自动重建的缓存后，C 盘回到 ' + cf.toFixed(1) + ' GB 可用。剩下的需要你看一眼再决定。'
-                : 'C 盘只剩 ' + cf.toFixed(1) + ' GB 可用（' + (cf / 512 * 100).toFixed(1) + '%）。可重建的 40.0 GB 里，有 25.2 GB 缓存可以放心一键清理。'}</p>
+                ? '清掉 ' + foamRows.length + ' 项会自动重建的缓存后，' + sys.id + ' 盘回到 ' + cf.toFixed(1) + ' GB 可用。剩下的需要你看一眼再决定。'
+                : sys.id + ' 盘只剩 ' + cf.toFixed(1) + ' GB 可用（' + (cf / sys.total * 100).toFixed(1) + '%）。可重建的 ' + k1.toFixed(1) + ' GB 里，有 ' + foamGb.toFixed(1) + ' GB 缓存可以放心一键清理。'}</p>
             </div>
             <HelloArt />
           </header>
           <div className="tiles">
-            <Link className={'tile t-state s-' + atmo} to={PATHS.map} aria-label={`C 盘可用 ${cf.toFixed(1)} GB，${atmoText}，打开空间地图`}>
-              <div className="tl-h"><span className="tl-ic"><svg width="18" height="18" viewBox="0 0 18 18" fill="none" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round"><path d="M2 6.5c1.6 0 1.6-1.3 3.2-1.3S6.8 6.5 8.4 6.5s1.6-1.3 3.2-1.3 1.6 1.3 3.2 1.3 1.6-1.3 1.6-1.3" /><path d="M2 11c1.6 0 1.6-1.3 3.2-1.3S6.8 11 8.4 11s1.6-1.3 3.2-1.3S13.2 11 14.8 11 16.4 9.7 16.4 9.7" opacity=".6" /><path d="M2 15h14.4" opacity=".35" /></svg></span><span className="tl-k">C 盘可用</span></div>
+            <Link className={'tile t-state s-' + atmo} to={PATHS.map} aria-label={`${sys.id} 盘可用 ${cf.toFixed(1)} GB，${atmoText}，打开空间地图`}>
+              <div className="tl-h"><span className="tl-ic"><svg width="18" height="18" viewBox="0 0 18 18" fill="none" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round"><path d="M2 6.5c1.6 0 1.6-1.3 3.2-1.3S6.8 6.5 8.4 6.5s1.6-1.3 3.2-1.3 1.6 1.3 3.2 1.3 1.6-1.3 1.6-1.3" /><path d="M2 11c1.6 0 1.6-1.3 3.2-1.3S6.8 11 8.4 11s1.6-1.3 3.2-1.3S13.2 11 14.8 11 16.4 9.7 16.4 9.7" opacity=".6" /><path d="M2 15h14.4" opacity=".35" /></svg></span><span className="tl-k">{sys.id} 盘可用</span></div>
               <div className="tl-n"><span className="mono num anim" style={{ ['--i' as string]: cfi, ['--dd' as string]: cfd }} /><span className="tl-u">GB</span></div>
-              <div className="tl-c">{atmoText} · 30 天少了 {(87.2 - cf).toFixed(1)} GB</div>
+              <div className="tl-c">{atmoText} · 30 天{sys.free30 - cf >= 0 ? '少了 ' + (sys.free30 - cf).toFixed(1) : '多了 ' + (cf - sys.free30).toFixed(1)} GB</div>
               {foam === 1 && <div className="foam-wave" aria-hidden="true" />}
             </Link>
             <Link className="tile t-sea" to={PATHS.suggest} aria-label={`可以腾出 ${cleanable} GB，查看清理建议`}>
               <div className="tl-h"><span className="tl-ic"><svg width="18" height="18" viewBox="0 0 18 18" fill="none" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round"><rect x="2.5" y="3" width="13" height="12" rx="2.5" /><path d="M6 9.2l2 2 4-4.4" /></svg></span><span className="tl-k">可以腾出</span></div>
               <div className="tl-n"><span className="mono">{cleanable}</span><span className="tl-u">GB</span></div>
-              <div className="tl-c">{fdone ? '其中 14.8 GB 可重建，缓存已清掉' : '其中 40.0 GB 可重建，含 25.2 GB 缓存'}</div>
+              <div className="tl-c">{fdone ? '其中 ' + k1.toFixed(1) + ' GB 可重建，缓存已清掉' : '其中 ' + k1.toFixed(1) + ' GB 可重建，含 ' + foamGb.toFixed(1) + ' GB 缓存'}</div>
             </Link>
             <section className={cx('tile t-sand', foam === 1 && 'is-busy', fdone && 'is-done')} aria-label="一键清理缓存">
               <div className="tl-h"><span className="tl-ic"><svg width="18" height="18" viewBox="0 0 18 18" fill="none" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round"><path d="M1.5 12c2 0 2-1.6 4-1.6s2 1.6 4 1.6 2-1.6 4-1.6 2 1.6 3 1.6" /><circle cx="6" cy="6" r="1.4" /><circle cx="10.5" cy="4.4" r="1" /><circle cx="13" cy="7.2" r="1.2" /></svg></span><span className="tl-k">{fdone ? '已清理缓存' : foam === 1 ? '正在清理…' : '随手可清'}</span></div>
-              <div className="tl-n"><span className="mono">25.2</span><span className="tl-u">GB</span>
-                {!foam && <button type="button" className="btn btn-sm tl-btn" onClick={foamGo}>一键清理</button>}
+              <div className="tl-n"><span className="mono">{(fdone ? foamFreed : foamGb).toFixed(1)}</span><span className="tl-u">GB</span>
+                {!foam && <button type="button" className="btn btn-sm tl-btn" onClick={() => void foamGo()}>一键清理</button>}
                 {fdone && <span className="tl-ok" aria-hidden="true">✓</span>}
               </div>
-              <div className="tl-c">{fdone ? '缓存会在用到时自动长回来' : '临时文件、浏览器、pip 等 6 项缓存'}</div>
+              <div className="tl-c">{fdone ? '缓存会在用到时自动长回来' : foamRows.slice(0, 3).map((r) => r.name.replace(/缓存$/, '')).join('、') + ' 等 ' + foamRows.length + ' 项缓存'}</div>
               {foam === 1 && <div className="foam-wave" aria-hidden="true" />}
             </section>
-            <section className="tile t-lime" aria-label={`近 90 天累计释放 ${freed90(fdone ? FOAM : 0).toFixed(1)} GB`}>
+            <section className="tile t-lime" aria-label={`近 90 天累计释放 ${freedTotal.toFixed(1)} GB`}>
               <div className="tl-h"><span className="tl-ic"><svg width="18" height="18" viewBox="0 0 18 18" fill="none" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round">{[5, 9, 13].flatMap((y) => [5, 9, 13].map((x) => <circle key={x + '-' + y} cx={x} cy={y} r="1.1" />))}</svg></span><span className="tl-k">近 90 天释放</span></div>
-              <div className="tl-n"><span className="mono">{freed90(fdone ? FOAM : 0).toFixed(1)}</span><span className="tl-u">GB</span></div>
-              <div className="tl-c">自动规则已代劳 28 次</div>
+              <div className="tl-n"><span className="mono">{freedTotal.toFixed(1)}</span><span className="tl-u">GB</span></div>
+              <div className="tl-c">{ov?.ruleRuns ? '自动规则已代劳 ' + ov.ruleRuns + ' 次' : '还没有自动规则运行过'}</div>
             </section>
           </div>
           <div className="ov-row">
             <section className="panel p-pad soft ov-ins" aria-labelledby="ov-r">
-              <h2 id="ov-r" className="sec-t"><span>C: 怎么腾出这 {cleanable} GB</span></h2>
+              <h2 id="ov-r" className="sec-t"><span>{sys.id}: 怎么腾出这 {cleanable} GB</span></h2>
               <div className="stack" role="img" aria-label={`可重建 ${k1} GB，需审阅 ${k2} GB，不可恢复 ${k3} GB`}>
                 <span className="sw-L1" style={{ flex: `${k1} 1 0` }} /><span className="sw-L2" style={{ flex: `${k2} 1 0` }} /><span className="sw-L3" style={{ flex: `${k3} 1 0`, boxShadow: 'inset 3px 0 0 var(--accent)' }} />
               </div>
@@ -135,15 +161,15 @@ export function Overview() {
             </section>
             <section className="panel p-pad soft ov-disks" aria-labelledby="ov-d">
               <h2 id="ov-d" className="sec-t">磁盘<span className="grow-1" /><Link to={PATHS.map}>空间地图</Link></h2>
-              {DISKS.map(([d, kind, total, free0, f30]) => {
-                const free = d === 'C' ? cf : free0, used = total - free, p = Math.round(used / total * 100), delta = f30 - free;
+              {drives.map(({ id: d, name: kind, total, free, free30: f30 }) => {
+                const used = total - free, p = Math.round(used / total * 100), delta = f30 - free;
                 return (
                   <Link key={d} className="drow" to={PATHS.map} aria-label={`${d}: ${kind}，${free.toFixed(1)} GB 可用，已用 ${p}%`}>
                     <span className="dr-ic" aria-hidden="true"><Icon name="drive" size={15} /></span>
                     <span className="dr-m">
-                      <span className="dr-n"><b>{d}:</b> {kind}</span><span className="dr-s">{free.toFixed(1)} GB 可用 · 共 {total} GB</span>
+                      <span className="dr-n"><b>{d}:</b> {kind}</span><span className="dr-s">{free.toFixed(1)} GB 可用 · 共 {Math.round(total)} GB</span>
                       <span className="capbar" aria-hidden="true"><span className="cb-used" style={{ flex: '0 0 ' + pct(used, total) }} /><span className="cb-tide" style={{ left: pct(total - f30, total) }} /></span>
-                      <span className="dr-d">{delta > 0.05 ? '30 天少了 ' + delta.toFixed(1) + ' GB' : '30 天没有变化'}</span>
+                      <span className="dr-d">{delta > 0.05 ? '30 天少了 ' + delta.toFixed(1) + ' GB' : delta < -0.05 ? '30 天多了 ' + (-delta).toFixed(1) + ' GB' : '30 天没有变化'}</span>
                     </span>
                     <span className={cx('pill mono', free / total < 0.12 && 'p-hi')}>{p}%</span>
                   </Link>
@@ -152,11 +178,11 @@ export function Overview() {
               <p className="cove-f"><span className="tide"><i />30 天前的水位</span></p>
             </section>
             <section className="panel p-pad soft ov-grow" aria-labelledby="ov-g">
-              <h2 id="ov-g" className="sec-t">30 天里涨得最多<span className="grow-1" /><span className="mono" style={{ color: 'var(--accent)' }}>+43.2 GB</span></h2>
-              {GROW.map(([name, lv, gb]) => (
-                <div key={name} className="gr"><span className={'sw10 sw-' + lv} /><span className="ellipsis">{name}</span><span className="gbar" aria-hidden="true"><i style={{ inlineSize: (gb / 12.4 * 100).toFixed(0) + '%' }} /></span><span className="mono r" style={{ textAlign: 'end' }}>+{gb.toFixed(1)}</span></div>
+              <h2 id="ov-g" className="sec-t">30 天里涨得最多<span className="grow-1" /><span className="mono" style={{ color: 'var(--accent)' }}>{ov?.growTotal ? '+' + ov.growTotal.toFixed(1) + ' GB' : ''}</span></h2>
+              {growers.map(({ name, lv, gb }) => (
+                <div key={name} className="gr"><span className={'sw10 sw-' + lv} /><span className="ellipsis">{name}</span><span className="gbar" aria-hidden="true"><i style={{ inlineSize: (gb / growMax * 100).toFixed(0) + '%' }} /></span><span className="mono r" style={{ textAlign: 'end' }}>+{gb.toFixed(1)}</span></div>
               ))}
-              <p className="ov-gf">微信和 Docker 占了这 30 天涨幅的一半，适合搬到 D: <Link to={PATHS.map}>去迁移 →</Link></p>
+              <p className="ov-gf">{ov?.growNote || '扫描两次以上之后，这里会列出涨得最快的文件夹'} {ov?.growNote ? <Link to={PATHS.map}>去迁移 →</Link> : null}</p>
             </section>
           </div>
         </div>
@@ -169,11 +195,11 @@ export function Overview() {
           </section>
           <section className="panel p-pad soft" aria-labelledby="ov-u">
             <h2 id="ov-u" className="sec-t">整理规则<span className="grow-1" /><Link to={PATHS.rules}>管理</Link></h2>
-            {RULES_ON.map(([name, when]) => (
+            {(ov?.rulesOn ?? []).map(([name, when]) => (
               <div key={name} className="rk" style={{ gridTemplateColumns: 'minmax(0, 1fr) auto' }}><span className="ellipsis">{name}</span><span className="muted small">{when}</span></div>
             ))}
-            <div className="rk" style={{ gridTemplateColumns: 'minmax(0, 1fr) auto' }}><span>C: 少于 20 GB 时提醒我</span><span className="tok">已开启</span></div>
-            <div className="muted small" style={{ paddingTop: '0.625rem' }}>另有 2 条未启用</div>
+            <div className="rk" style={{ gridTemplateColumns: 'minmax(0, 1fr) auto' }}><span>{sys.id}: 少于 20 GB 时提醒我</span><span className="tok">{lowText}</span></div>
+            <div className="muted small" style={{ paddingTop: '0.625rem' }}>另有 {ov?.rulesOff ?? 0} 条未启用</div>
           </section>
         </div>
       </Scroll>

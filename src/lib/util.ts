@@ -12,10 +12,9 @@ export function shortHead(h: string, max: number): string {
   return parts[0] + '\\…\\' + out + end;
 }
 
-export type Level = 'L1' | 'L2' | 'L3';
+export type { Level } from '../services/types';
 
-/** C: capacity in GB; every "tight / ok" read in the app keys off this. */
-export const C_TOTAL = 512;
 export type Atmo = 'hi' | 'mid' | 'lo';
-export const atmoOf = (free: number, total = C_TOTAL): Atmo => (free / total < 0.12 ? 'hi' : free / total < 0.2 ? 'mid' : 'lo');
+/** Space state of a drive: under 12% free is tight, under 20% is getting tight. */
+export const atmoOf = (free: number, total: number): Atmo => (free / total < 0.12 ? 'hi' : free / total < 0.2 ? 'mid' : 'lo');
 export const ATMO_TEXT: Record<Atmo, string> = { hi: '空间紧张', mid: '空间偏紧', lo: '空间充足' };

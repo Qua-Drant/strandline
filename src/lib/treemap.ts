@@ -1,8 +1,7 @@
 // Space-map layout: free space as a true-proportion band along the top, categories below,
 // and within each category a squarified treemap whose blocks never shrink under a readable label box.
 // Fragments that would be too small fold together, but only with blocks of the same safety level.
-import { CATS } from '../data/map';
-import type { MapLevel } from '../data/map';
+import type { Cat, MapLevel } from '../services/types';
 
 export const MINW = 84, MINH = 38;
 type Rect = [x: number, y: number, w: number, h: number];
@@ -150,12 +149,12 @@ function bestLayout(units: Unit[], X: number, Y: number, W: number, H: number) {
   return best;
 }
 
-export function layoutMap(W: number, H: number, free: number, total: number, items: MapItems): Layout {
+export function layoutMap(W: number, H: number, free: number, total: number, items: MapItems, cats: Cat[]): Layout {
   const out: Layout = { free: { x: 0, y: 0, w: W, h: 0 }, sects: {}, cells: {}, clusters: {} };
   const fh = Math.max(28, H * free / total);
   out.free = { x: 0, y: 0, w: W, h: fh };
   const ry = fh + 6, rh = Math.max(0, H - ry);
-  const live = CATS.map((c) => ({ c, its: c.items.map((id) => items[id]).filter((it) => it.v > 0.05) }))
+  const live = cats.map((c) => ({ c, its: c.items.map((id) => items[id]).filter((it) => it && it.v > 0.05) }))
     .map((o) => ({ ...o, v: o.its.reduce((a, it) => a + it.v, 0) })).filter((o) => o.v > 0.05).sort((a, b) => b.v - a.v);
   const top: Unit[] = live.map((o) => ({ key: o.c.id, v: o.v }));
   const SW = 96, SH = 72;

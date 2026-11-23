@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
-import { C_FREE_0 } from '../data/history';
+import { diskService } from '../services/diskService';
+import type { DriveInfo } from '../services/types';
 import { ShellContext, type DriveId, type ShellState, type Task, type Theme, type Toast, type ToastInput } from './context';
 
 function readTheme(): Theme {
@@ -7,9 +8,29 @@ function readTheme(): Theme {
   return 'sys';
 }
 
+/** Drives plus the system drive's open suggestion count (sidebar badge). */
+async function readDrives() {
+  const ds = await diskService.listDrives();
+  const sys = ds.find((d) => d.id === 'C') ?? ds[0];
+  const n = sys ? (await diskService.getSuggestions(sys.id)).filter((r) => !r.done).length : 0;
+  return { ds, n };
+}
+
+type Boot = Awaited<ReturnType<typeof readDrives>>;
+
+/** Reads the drives once, then mounts the shell so nothing renders with placeholder sizes. */
 export function ShellProvider({ children }: { children: ReactNode }) {
-  const [cFree, setCFree] = useState(C_FREE_0);
-  const [dFree, setDFree] = useState(388.0);
+  const [boot, setBoot] = useState<Boot | null>(null);
+  useEffect(() => {
+    let live = true;
+    void readDrives().then((b) => { if (live) setBoot(b); });
+    return () => { live = false; };
+  }, []);
+  return boot ? <ShellCore boot={boot}>{children}</ShellCore> : null;
+}
+
+function ShellCore({ boot, children }: { boot: Boot; children: ReactNode }) {
+  const [drives, setDrives] = useState<DriveInfo[]>(boot.ds);
   const [foam, setFoam] = useState<0 | 1 | 2>(0);
   const [writing, setWriting] = useState<Partial<Record<DriveId, boolean>>>({});
   const [theme, setThemeState] = useState<Theme>(readTheme);
@@ -17,7 +38,7 @@ export function ShellProvider({ children }: { children: ReactNode }) {
   const [toasts, setToasts] = useState<Toast[]>([]);
   const [task, setTask] = useState<Task | null>(null);
   const [pal, setPal] = useState(false);
-  const [suggestN, setSuggestN] = useState<number | null>(null);
+  const [suggestN, setSuggestN] = useState<number | null>(boot.n);
   const [scanAt, setScanAt] = useState('13:52');
   const [appEl, setAppEl] = useState<HTMLDivElement | null>(null);
   const tid = useRef(1);
@@ -57,13 +78,17 @@ export function ShellProvider({ children }: { children: ReactNode }) {
   }, []);
   const runEscape = useCallback(() => escape.current?.(), []);
 
+  const refreshDrives = useCallback(() => readDrives().then(({ ds, n }) => { setDrives(ds); setSuggestN(n); }), []);
+
   useEffect(() => () => { if (taskTimer.current) window.clearInterval(taskTimer.current); }, []);
 
-  const value = useMemo<ShellState>(() => ({
-    cFree, setCFree, dFree, setDFree, foam, setFoam, writing, setWriting, theme, setTheme, sbDisk, setSbDisk,
+  const value = useMemo<ShellState>(() => {
+    const sys = drives.find((d) => d.id === 'C') ?? drives[0];
+    return {
+    drives, sys, cFree: sys.free, refreshDrives, foam, setFoam, writing, setWriting, theme, setTheme, sbDisk, setSbDisk,
     toasts, pushToast, dropToast, task, startTask, setTask, pal, setPal, suggestN, setSuggestN, scanAt, setScanAt,
     registerEscape, runEscape, appEl, setAppEl,
-  }), [cFree, dFree, foam, writing, theme, setTheme, sbDisk, toasts, pushToast, dropToast, task, startTask, pal, suggestN, scanAt, registerEscape, runEscape, appEl]);
+  }; }, [drives, refreshDrives, foam, writing, theme, setTheme, sbDisk, toasts, pushToast, dropToast, task, startTask, pal, suggestN, scanAt, registerEscape, runEscape, appEl]);
 
   return <ShellContext.Provider value={value}>{children}</ShellContext.Provider>;
 }
