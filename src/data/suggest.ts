@@ -1,0 +1,27 @@
+import type { Level } from '../lib/util';
+
+export type CleanAct = 'rebuild' | 'recycle' | 'empty' | 'setting';
+export interface CleanRow { id: string; name: string; level: Level; act: CleanAct; gain: number; head: string; tail: string; note: string; cmd: string; meta: boolean; last: string; days: number }
+
+export const ROWS: CleanRow[] = [
+  { id: 'hiber', name: '休眠文件', level: 'L2', act: 'setting', gain: 12.8, head: 'C:\\', tail: 'hiberfil.sys', note: '关掉休眠会同时关掉快速启动，开机会慢几秒；随时可以还原。', cmd: 'powercfg /h off', meta: true, last: '—', days: 999 },
+  { id: 'docker', name: 'Docker WSL 磁盘', level: 'L2', act: 'rebuild', gain: 11.6, head: '%LOCALAPPDATA%\\Docker\\wsl\\disk\\', tail: 'docker_data.vhdx', note: '虚拟磁盘只涨不缩。只清掉没有被任何容器使用的镜像，再压缩磁盘；数据卷不动。', cmd: 'docker image prune -a\nwsl --shutdown\nOptimize-VHD -Path "$env:LOCALAPPDATA\\Docker\\wsl\\disk\\docker_data.vhdx" -Mode Full', meta: true, last: '昨天', days: 1 },
+  { id: 'condapkgs', name: 'conda 包缓存', level: 'L1', act: 'rebuild', gain: 9.4, head: '%USERPROFILE%\\miniconda3\\', tail: 'pkgs', note: '装完包留下的压缩包，需要时会重新下载。', cmd: 'conda clean --all -y', meta: false, last: '5 周前', days: 35 },
+  { id: 'nodem', name: '旧项目 node_modules ×23', level: 'L2', act: 'rebuild', gain: 7.1, head: '%USERPROFILE%\\Projects\\…\\', tail: 'node_modules', note: '这些项目 90 天没改动；npm install 可以恢复。', cmd: 'Remove-Item <23 个 node_modules 目录> -Recurse', meta: true, last: '3 个月前', days: 95 },
+  { id: 'qwen', name: 'Qwen2-7B 旧副本', level: 'L2', act: 'rebuild', gain: 14.2, head: '%USERPROFILE%\\.cache\\huggingface\\hub\\', tail: 'models--Qwen--Qwen2-7B-Instruct', note: '7 个月没被加载过，可以从 Hugging Face 重新下载。', cmd: 'Remove-Item "$env:USERPROFILE\\.cache\\huggingface\\hub\\models--Qwen--Qwen2-7B-Instruct" -Recurse', meta: true, last: '7 个月前', days: 210 },
+  { id: 'installers', name: '已安装的安装包 ×17', level: 'L2', act: 'recycle', gain: 4.2, head: '%USERPROFILE%\\Downloads\\', tail: '*.exe, *.msi', note: '17 个安装包对应的应用都已装好。放进回收站，需要时还能找回。', cmd: '移入回收站（17 个文件）', meta: true, last: '3 个月前', days: 90 },
+  { id: 'pip', name: 'pip 缓存', level: 'L1', act: 'rebuild', gain: 6.8, head: '%LOCALAPPDATA%\\pip\\', tail: 'Cache', note: '下载过的安装包缓存，需要时会重新下载。', cmd: 'pip cache purge', meta: false, last: '3 天前', days: 3 },
+  { id: 'temp', name: '临时文件', level: 'L1', act: 'rebuild', gain: 6.3, head: '', tail: '%TEMP%', note: '程序运行时留下的临时文件，正在用的会自动跳过。', cmd: 'Remove-Item "$env:TEMP\\*" -Recurse -Force', meta: false, last: '今天', days: 0 },
+  { id: 'browser', name: '浏览器缓存', level: 'L1', act: 'rebuild', gain: 4.8, head: '%LOCALAPPDATA%\\Microsoft\\Edge\\User Data\\Default\\', tail: 'Cache', note: 'Edge 与 Chrome 的网页缓存，不含密码和书签。', cmd: 'Remove-Item "$env:LOCALAPPDATA\\Microsoft\\Edge\\User Data\\Default\\Cache" -Recurse', meta: false, last: '今天', days: 0 },
+  { id: 'npm', name: 'npm 缓存', level: 'L1', act: 'rebuild', gain: 3.3, head: '%LOCALAPPDATA%\\', tail: 'npm-cache', note: '下载过的 npm 包，需要时会重新下载。', cmd: 'npm cache clean --force', meta: false, last: '2 周前', days: 14 },
+  { id: 'nvidia', name: 'NVIDIA 安装缓存', level: 'L1', act: 'rebuild', gain: 2.1, head: 'C:\\ProgramData\\NVIDIA Corporation\\', tail: 'Downloader', note: '驱动安装完成后留下的安装包。', cmd: 'Remove-Item "C:\\ProgramData\\NVIDIA Corporation\\Downloader\\*" -Recurse', meta: false, last: '4 个月前', days: 120 },
+  { id: 'delivery', name: '传递优化文件', level: 'L1', act: 'rebuild', gain: 1.9, head: 'C:\\Windows\\SoftwareDistribution\\', tail: 'DeliveryOptimization', note: 'Windows 更新时的分发缓存。', cmd: 'Delete-DeliveryOptimizationCache -Force', meta: false, last: '1 个月前', days: 30 },
+  { id: 'recycle', name: '回收站', level: 'L3', act: 'empty', gain: 9.6, head: 'C:\\', tail: '$Recycle.Bin', note: '已经删掉、还没清空的文件。清空后无法找回。', cmd: 'Clear-RecycleBin -DriveLetter C', meta: false, last: '—', days: 999 },
+  { id: 'winupd', name: 'Windows 更新残留', level: 'L1', act: 'rebuild', gain: 5.4, head: 'C:\\Windows\\', tail: 'WinSxS', note: '被新版本替换掉的系统组件，由 Windows 自带工具清理。', cmd: 'Dism.exe /Online /Cleanup-Image /StartComponentCleanup', meta: false, last: '6 个月前', days: 180 },
+];
+
+export const ALABEL: Record<CleanAct, string> = { rebuild: '删除 · 可重建', recycle: '移入回收站 · 可撤销', empty: '清空 · 不可恢复', setting: '改设置 · 可还原' };
+export const LVN: Record<Level, string> = { L1: '可重建', L2: '需审阅', L3: '不可恢复' };
+export const LVD: Record<Level, string> = { L1: '删了会自动重建，放心清理', L2: '可能还用得到，或会改系统设置', L3: '清空后找不回' };
+export const AGES: [string, number, number][] = [['今天', 0, 0], ['一周内', 1, 7], ['一个月内', 8, 31], ['半年内', 32, 180], ['半年以上', 181, 900]];
+export const DEFAULT_CHECKED = ['condapkgs', 'pip', 'temp', 'browser', 'npm', 'nvidia', 'delivery', 'winupd'];
