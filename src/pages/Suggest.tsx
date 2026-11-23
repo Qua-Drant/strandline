@@ -3,10 +3,10 @@ import { TideCalendar } from '../components/TideCalendar';
 import { AGES, ALABEL, DEFAULT_CHECKED, LVD, LVN, ROWS, type CleanAct } from '../data/suggest';
 import { sound } from '../lib/sound';
 import { cx, shortHead, type Level } from '../lib/util';
-import { Link } from '../router';
+import { Link } from '../components/Link';
 import { PATHS } from '../routes';
 import { Cbx, Modal, PageHeader, Scroll, Seg } from '../shell/parts';
-import { useEscape, useShell } from '../shell/store';
+import { useEscape, useShell } from '../shell/context';
 
 type Filter = 'all' | Level;
 const toSet = (ids: string[]) => Object.fromEntries(ids.map((i) => [i, true])) as Record<string, boolean>;

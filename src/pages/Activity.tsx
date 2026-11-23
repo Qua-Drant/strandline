@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import { cx } from '../lib/util';
 import { PageHeader, Scroll } from '../shell/parts';
-import { useShell } from '../shell/store';
+import { useShell } from '../shell/context';
 
 type Kind = 'clean' | 'move' | 'rule' | 'scan';
 interface Ev { id: string; day: string; time: string; kind: Kind; title: string; detail: string; amount: string; undo: string; items: [string, string, string][] }

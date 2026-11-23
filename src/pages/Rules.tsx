@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import { cx } from '../lib/util';
 import { Modal, PageHeader } from '../shell/parts';
-import { useEscape, useShell } from '../shell/store';
+import { useEscape, useShell } from '../shell/context';
 
 type Sched = 'new' | 'day' | 'week' | 'month';
 interface Rule { id: string; name: string; on: boolean; sched: Sched; lv: string; do: string; when: [string, string][]; last: string; files: [string, number][] }

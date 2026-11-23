@@ -1,7 +1,7 @@
 import { useState, type ReactNode } from 'react';
 import { sound } from '../lib/sound';
 import { PageHeader, Scroll } from '../shell/parts';
-import { useShell, type Theme } from '../shell/store';
+import { useShell, type Theme } from '../shell/context';
 
 const SWD = { autostart: true, sound: false, daily: true, recycleFirst: true, checkRunning: true, skipInUse: true, low: true, weekly: false, inst: true };
 type SwKey = keyof typeof SWD;

@@ -3,10 +3,10 @@ import { Icon } from '../components/Icon';
 import { C_FREE_0, FOAM, freed90 } from '../data/history';
 import { sound } from '../lib/sound';
 import { ATMO_TEXT, atmoOf, cx, pct } from '../lib/util';
-import { Link } from '../router';
+import { Link } from '../components/Link';
 import { PATHS } from '../routes';
 import { PageHeader, Scroll } from '../shell/parts';
-import { useShell } from '../shell/store';
+import { useShell } from '../shell/context';
 
 const DISKS: [string, string, number, number, number][] = [['C', '系统盘', 512, 44.0, 87.2], ['D', '数据盘', 1000, 388.0, 401.5], ['E', '移动硬盘', 965, 637.0, 637.0]];
 const GROW: [string, string, number][] = [['微信聊天原图与视频', 'L4', 12.4], ['Docker WSL 磁盘', 'L2', 9.8], ['Sentinel-2 2023', 'L4', 8.0], ['pip 缓存', 'L1', 4.6], ['浏览器缓存', 'L1', 3.1], ['临时文件', 'L1', 2.6], ['其他 11 项', 'L4', 2.7]];

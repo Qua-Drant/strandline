@@ -1,10 +1,10 @@
 import { useState } from 'react';
 import { sound } from '../lib/sound';
 import { cx, shortHead } from '../lib/util';
-import { Link } from '../router';
+import { Link } from '../components/Link';
 import { PATHS } from '../routes';
 import { Cbx, PageHeader, Scroll, Seg } from '../shell/parts';
-import { useShell } from '../shell/store';
+import { useShell } from '../shell/context';
 
 type FType = 'video' | 'img' | 'model' | 'inst' | 'zip' | 'data' | 'sys';
 type Kind = 'map' | 'vm' | 'hiber' | 'copy' | null;

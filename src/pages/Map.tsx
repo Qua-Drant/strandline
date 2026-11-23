@@ -1,4 +1,4 @@
-import { Fragment, useCallback, useEffect, useRef, useState, type CSSProperties, type MouseEvent as RMouseEvent, type PointerEvent as RPointerEvent } from 'react';
+import { Fragment, useCallback, useEffect, useLayoutEffect, useRef, useState, type CSSProperties, type MouseEvent as RMouseEvent, type PointerEvent as RPointerEvent } from 'react';
 import { Icon } from '../components/Icon';
 import { CATS, LEAVES, MOVES, type Leaf, type MapAct, type MapLevel, type Move } from '../data/map';
 import { HIST30 } from '../data/history';
@@ -8,7 +8,7 @@ import { ATMO_TEXT, atmoOf, clamp, cx } from '../lib/util';
 import { PATHS } from '../routes';
 import { AppPortal, Cbx, Modal, Seg } from '../shell/parts';
 import { Shell, Toasts } from '../shell/Shell';
-import { useEscape, useShell } from '../shell/store';
+import { useEscape, useShell } from '../shell/context';
 import { DECO } from './map/deco';
 
 // ---------- constants
@@ -43,6 +43,10 @@ interface MapState {
   overlay: Overlay; menu: { id: string; x: number; y: number; W: number; H: number } | null; detail: string | null; dOpen: boolean; moveId: string | null;
   editing: boolean; draft: string; mode: Mode; open: Record<string, boolean> | null; hover: string | null; pinned: string | null; focusCat: string | null;
   drag: Drag | null; confirm: boolean; lw: number; mapW: number; mapH: number; rem: Flags;
+  /** map model frozen while the ebb wash plays, so blocks melt where they stood */
+  frozen: { items: MapItems; free: number } | null;
+  /** last known rect of every block, so removed ones collapse toward where they were */
+  seen: Record<string, Box>;
 }
 
 const INIT: MapState = {
@@ -50,14 +54,14 @@ const INIT: MapState = {
   run: null, queue: [], qi: 0, step: 0, ebb: null, ebbIds: {}, tc: null, moved: {}, moving: null, movingTo: 'D', mp: 0, paused: false, retried: false,
   toEdits: {}, verify: {}, linkOff: {}, overlay: null, menu: null, detail: null, dOpen: false, moveId: null, editing: false, draft: '',
   mode: 'all', open: null, hover: null, pinned: null, focusCat: null, drag: null, confirm: false, lw: 320, mapW: NW, mapH: NH,
-  rem: { low: true, weekly: false, inst: true },
+  rem: { low: true, weekly: false, inst: true }, frozen: null, seen: {},
 };
 
 /** Class-style merged state, with a ref that always holds the latest value for timers. */
 function useMergeState<T extends object>(init: T) {
   const [s, setS] = useState(init);
   const ref = useRef(s);
-  ref.current = s;
+  useLayoutEffect(() => { ref.current = s; });
   const set = useCallback((p: Partial<T> | ((prev: T) => Partial<T>)) => {
     setS((prev) => { const n = { ...prev, ...(typeof p === 'function' ? p(prev) : p) }; ref.current = n; return n; });
   }, []);
@@ -69,13 +73,10 @@ export function MapPage() {
   const { cFree: freeNow, setCFree, pushToast, setPal, pal, setTask, setWriting, setDFree, setSuggestN, setScanAt, appEl } = shell;
   const [s, set, sref] = useMergeState(INIT);
   const timer = useRef<number | null>(null), mtimer = useRef<number | null>(null), ebbT = useRef<number[]>([]);
-  const frozen = useRef<{ items: MapItems; free: number } | null>(null);
-  const lastSeen = useRef<Record<string, Box>>({});
   const mapEl = useRef<HTMLElement | null>(null);
   const mr = useRef<DOMRect | null>(null);
   const split = useRef<{ x: number; w: number } | null>(null);
   const [splitting, setSplitting] = useState(false);
-  const freeRef = useRef(freeNow); freeRef.current = freeNow;
 
   // ---------- model helpers (read the given state so timers can pass the latest)
   const size = (id: string, st: MapState = s) => {
@@ -141,9 +142,8 @@ export function MapPage() {
     halt();
     const st = sref.current;
     const ids = Object.keys(st.checked).filter((id) => st.checked[id] && selectable(id, st)).sort((a, b) => RUN_ORDER.indexOf(LEAF[a].act) - RUN_ORDER.indexOf(LEAF[b].act));
-    frozen.current = { items: items(st), free: freeRef.current };
     const ebbIds: Flags = Object.fromEntries(ids.map((id) => [id, true]));
-    set({ phase: 'cleaning', queue: ids, qi: 0, step: 0, confirm: false, run: { ids: [], amt: {}, freed: 0, bin: 0 }, undone: {}, overlay: null, dOpen: false, hover: null, pinned: null, ebb: 'lift', ebbIds });
+    set({ frozen: { items: items(st), free: freeNow }, phase: 'cleaning', queue: ids, qi: 0, step: 0, confirm: false, run: { ids: [], amt: {}, freed: 0, bin: 0 }, undone: {}, overlay: null, dOpen: false, hover: null, pinned: null, ebb: 'lift', ebbIds });
     const at = (ms: number, f: () => void) => { ebbT.current.push(window.setTimeout(f, ms)); };
     at(150, () => { set({ ebb: 'wave' }); sound.wash(false, 460); });
     at(560, () => {
@@ -155,9 +155,8 @@ export function MapPage() {
         else if (L.act === 'recycle') { const g = L.gb; run.amt[id] = g; run.bin += g; up.bin += g; up.recycled[id] = g; up.cleaned[id] = true; }
         else { const g = L.actual; run.amt[id] = g; run.freed += g; up.cleaned[id] = true; }
       });
-      frozen.current = null;
       setCFree((c) => c + run.freed);
-      set({ ...up, run, qi: cur.queue.length, step: 0, ebb: 'grow' });
+      set({ ...up, run, qi: cur.queue.length, step: 0, ebb: 'grow', frozen: null });
     });
     at(950, () => set({ phase: 'report', checked: {}, ebb: null }));
   };
@@ -216,8 +215,8 @@ export function MapPage() {
   // ---------- derived view
   const ph = s.phase, isScanning = ph === 'scanning', isResults = ph === 'results', isCleaning = ph === 'cleaning', isReport = ph === 'report';
   const W = s.mapW || NW, H = s.mapH || NH;
-  const its = isCleaning && frozen.current ? frozen.current.items : items();
-  const shownFree = isCleaning && frozen.current ? frozen.current.free : freeNow;
+  const its = isCleaning && s.frozen ? s.frozen.items : items();
+  const shownFree = isCleaning && s.frozen ? s.frozen.free : freeNow;
   const lay = layoutMap(W, H, shownFree, TOTAL, its);
   const sel = LEAVES.filter((l) => s.checked[l.id] && selectable(l.id)).map((l) => l.id);
   const selFree = isResults ? sel.filter((id) => LEAF[id].act !== 'recycle').reduce((a, id) => a + gain(id), 0) : 0;
@@ -251,9 +250,10 @@ export function MapPage() {
 
   // the ridge rises from the map bottom over 410 ms; each block dissolves as it passes the block's middle
   const meltDelay = (b?: Box) => (b ? Math.round(clamp(1 - (b.y + b.h / 2) / H, 0, 1) * 410) + 'ms' : '0ms');
+  const seenNow: Record<string, Box> = {};
   const rectStyle = (b: Box | { x: number; y: number; w: number; h: number } | null | undefined, id: string): CSSProperties => {
-    if (b && b.w > 0) { lastSeen.current[id] = b as Box; return { left: pc(b.x, W), top: pc(b.y, H), width: pc(b.w, W), height: pc(b.h, H) }; }
-    const p = lastSeen.current[id];
+    if (b && b.w > 0) { seenNow[id] = b as Box; return { left: pc(b.x, W), top: pc(b.y, H), width: pc(b.w, W), height: pc(b.h, H) }; }
+    const p = s.seen[id];
     return p ? { left: pc(p.x + p.w / 2, W), top: pc(p.y + p.h / 2, H), width: '0%', height: '0%' } : { left: '50%', top: '50%', width: '0%', height: '0%' };
   };
   const moveCells: Flags = {}, movingCells: Flags = {};
@@ -277,7 +277,7 @@ export function MapPage() {
     openOverlay('menu', { menu: { id, x: e.clientX - r.left, y: e.clientY - r.top, W: r.width, H: r.height } });
   };
 
-  let foundN = 0, foundGb = 0;
+  const found = { n: 0, gb: 0 };
   const decoOf: Record<string, string> = {};
   CATS.forEach((c) => { let best: string | null = null, ba = 0; c.items.forEach((id) => { const bb = lay.cells[id]; if (!bb || bb.merged || bb.mode !== 'full' || bb.w < 120 || bb.h < 96) return; if (bb.w * bb.h > ba) { ba = bb.w * bb.h; best = id; } }); if (best) decoOf[best] = c.id; });
 
@@ -288,7 +288,7 @@ export function MapPage() {
     const on = (isResults && !!s.checked[id] && selectable(id)) || !!hit[id];
     const sz = its[id].v, mv = !!movingCells[id];
     const pend = pending(id) && !gone;
-    if (isScanning && !gone && !pend && lv !== 'L4') { foundN += 1; foundGb += sz; }
+    if (isScanning && !gone && !pend && lv !== 'L4') { found.n += 1; found.gb += sz; }
     const status = doneIds[id] ? '已清理' : s.ignored[id] ? '已忽略' : mv ? (s.paused ? '迁移已暂停 · ' : '迁移中 · ') + Math.round(s.mp) + '%' : '';
     const mvTag = lv === 'L4' && migratable(id) && !mv && !(b && b.mode === 'compact' && b.w < 110);
     const full = !b || b.mode === 'full';
@@ -329,7 +329,7 @@ export function MapPage() {
     const nm = b && tw(nmL, b.h < 46 ? 11 : 12) > b.w - 16 - (lvk === 'L4' ? 0 : 14) ? nmS : nmL;
     const full = !b || b.mode === 'full';
     const pend = isScanning && mem.some((m) => pending(m));
-    if (isScanning && b && !pend && lvk !== 'L4') { foundN += mem.length; foundGb += gb; }
+    if (isScanning && b && !pend && lvk !== 'L4') { found.n += mem.length; found.gb += gb; }
     const allDim = mem.length > 0 && mem.every((m) => dimFor(m));
     const cmelt = s.ebb !== null && s.ebb !== 'lift' && mem.length > 0 && mem.every((m) => s.ebbIds[m]);
     blocks.push({
@@ -467,6 +467,9 @@ export function MapPage() {
   const ctaN = dg ? dg.n + nSel - sel.filter((id) => hit[id]).length : nSel;
   const ctaGb = dg ? selFree + Object.keys(hit).filter((id) => !s.checked[id]).reduce((a, id) => a + gain(id), 0) : selFree;
   const atmo = atmoOf(shownFree);
+  // remember where each block was drawn, so a block that disappears can collapse toward that spot
+  const seenSig = Object.entries(seenNow).map(([k, b]) => k + ':' + b.x.toFixed(1) + ',' + b.y.toFixed(1) + ',' + b.w.toFixed(1) + ',' + b.h.toFixed(1)).join('|');
+  useEffect(() => { set((p) => ({ seen: { ...p.seen, ...seenNow } })); }, [seenSig]); // eslint-disable-line react-hooks/exhaustive-deps
   const mvTask = s.moving ? moveOf(s.moving) : null;
 
   // ---------- sync the shell (sidebar task slot, drive bars, suggest count)
@@ -723,7 +726,7 @@ export function MapPage() {
                   );
                 })}
               </ol>
-              <div className="muted" style={{ fontSize: '0.75rem', marginTop: '0.5rem' }}>已发现 <span className="mono" style={{ color: 'var(--ink)' }}>{foundN}</span> 项 · <span className="mono" style={{ color: 'var(--ink)' }}>{foundGb.toFixed(1)}</span> GB</div>
+              <div className="muted" style={{ fontSize: '0.75rem', marginTop: '0.5rem' }}>已发现 <span className="mono" style={{ color: 'var(--ink)' }}>{found.n}</span> 项 · <span className="mono" style={{ color: 'var(--ink)' }}>{found.gb.toFixed(1)}</span> GB</div>
             </div>
             <div style={{ display: 'grid', gap: '0.875rem', marginTop: '1.25rem' }} aria-hidden="true">
               {[62, 48, 70, 40, 56].map((w) => <div key={w} style={{ display: 'flex', gap: '0.625rem', alignItems: 'center' }}><span className="skel" style={{ inlineSize: '1rem', blockSize: '1rem' }} /><span className="skel" style={{ inlineSize: w + '%' }} /><span style={{ flex: '1 1 auto' }} /><span className="skel" style={{ inlineSize: '2.25rem' }} /></div>)}

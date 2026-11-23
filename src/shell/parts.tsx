@@ -1,8 +1,8 @@
-import { useEffect, useRef, type CSSProperties, type ReactNode } from 'react';
+import type { CSSProperties, ReactNode } from 'react';
 import { createPortal } from 'react-dom';
 import { Icon } from '../components/Icon';
 import { ATMO_TEXT, atmoOf, C_TOTAL, cx } from '../lib/util';
-import { useShell } from './store';
+import { useShell } from './context';
 
 /** "空间紧张 / 偏紧 / 充足" status tag in each page header, keyed off C: free space. */
 export function AtmoTag() {
@@ -75,11 +75,4 @@ export function Seg<K extends string | number>({ items, value, onPick, label, cl
       {items.map(([k, l]) => <button key={String(k)} type="button" aria-pressed={k === value} onClick={() => onPick(k)}>{l}</button>)}
     </div>
   );
-}
-
-/** Focus the first [autofocus]-like element when mounted. */
-export function useAutoFocus<T extends HTMLElement>() {
-  const ref = useRef<T>(null);
-  useEffect(() => { ref.current?.focus(); }, []);
-  return ref;
 }

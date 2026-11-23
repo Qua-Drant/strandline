@@ -2,7 +2,7 @@ import { useState } from 'react';
 import { sound } from '../lib/sound';
 import { cx, shortHead } from '../lib/util';
 import { PageHeader, Scroll, Seg } from '../shell/parts';
-import { useShell } from '../shell/store';
+import { useShell } from '../shell/context';
 
 interface Copy { dir: string; date: string }
 interface Group { id: string; name: string; each: number; copies: Copy[] }

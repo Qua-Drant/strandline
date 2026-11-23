@@ -2,10 +2,11 @@ import { useEffect, useRef, useState, type ReactNode } from 'react';
 import { Icon } from '../components/Icon';
 import { soundTap } from '../lib/sound';
 import { atmoOf, cx } from '../lib/util';
-import { Link, navigate } from '../router';
+import { Link } from '../components/Link';
+import { navigate } from '../router';
 import { NAV, PATHS } from '../routes';
 import { AppPortal } from './parts';
-import { useShell, type DriveId } from './store';
+import { useShell, type DriveId } from './context';
 
 interface DriveRow { id: DriveId; name: string; total: number; free: number; free30: number }
 
@@ -177,18 +178,18 @@ export function Toasts({ bottom = '4.5rem' }: { bottom?: string }) {
 /** Window frame: title bar, sidebar, page area. Pages render their header + content as children. */
 /** `palette` replaces the default page palette (the space map has its own, with commands). */
 export function Shell({ path, children, commands, palette }: { path: string; children: ReactNode; commands?: PaletteCommand[]; palette?: ReactNode }) {
-  const { cFree, theme, pal, setPal, escape, setAppEl } = useShell();
+  const { cFree, theme, pal, setPal, runEscape, setAppEl } = useShell();
   const atmo = atmoOf(cFree);
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       const k = (e.key || '').toLowerCase();
       if ((e.ctrlKey || e.metaKey) && k === 'k') { e.preventDefault(); setPal(!pal); }
-      else if (k === 'escape') { if (pal) setPal(false); else escape.current?.(); }
+      else if (k === 'escape') { if (pal) setPal(false); else runEscape(); }
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
-  }, [pal, setPal, escape]);
+  }, [pal, setPal, runEscape]);
 
   return (
     <div ref={setAppEl} className="app" onPointerDown={soundTap}
