@@ -115,3 +115,58 @@ fn unreadable_folders_are_skipped_and_counted() {
     assert!(res.total > 20 << 30, "the rest of the sandbox was still scanned");
     assert!(!res.files.iter().any(|f| f.path.starts_with(&locked)));
 }
+
+#[test]
+fn pnpm_small_hardlinks_and_extended_catalog_fingerprints() {
+    use std::collections::HashSet;
+    use strandline_lib::catalog;
+    use strandline_lib::model::DriveInfo;
+
+    let (_d, root, r) = setup();
+    let before = full(&root, &r);
+
+    // < 1 MiB pnpm store file hard-linked into a project's node_modules/.pnpm
+    let store_pkg = r.local.join("pnpm").join("store").join("v3").join("index.js");
+    let proj_pkg = r.user.join("Projects").join("web-app").join("node_modules").join(".pnpm").join("index.js");
+    std::fs::create_dir_all(store_pkg.parent().unwrap()).unwrap();
+    std::fs::create_dir_all(proj_pkg.parent().unwrap()).unwrap();
+    std::fs::write(&store_pkg, vec![9u8; 64 * 1024]).unwrap();
+    std::fs::hard_link(&store_pkg, &proj_pkg).unwrap();
+
+    // Extended developer & CN app directories (>= 2 MB each so gb >= 0.001 threshold passes)
+    let write_mb = |p: PathBuf, mb: usize| {
+        std::fs::create_dir_all(p.parent().unwrap()).unwrap();
+        std::fs::write(p, vec![3u8; mb * 1024 * 1024]).unwrap();
+    };
+    write_mb(r.local.join("pnpm").join("store").join("v3").join("big.tar"), 3);
+    write_mb(r.local.join("uv").join("cache").join("wheels").join("polars.whl"), 3);
+    write_mb(r.user.join(".nuget").join("packages").join("newtonsoft.json").join("lib.dll"), 3);
+    write_mb(r.user.join(".m2").join("repository").join("org").join("demo").join("app.jar"), 3);
+    write_mb(r.local.join("JetBrains").join("RustRover2026.2").join("caches").join("idx.dat"), 3);
+    write_mb(r.local.join("NVIDIA").join("DXCache").join("shader.bin"), 3);
+    write_mb(r.local.join("JianyingPro").join("User Data").join("Cache").join("proxy.mp4"), 3);
+    write_mb(r.local.join("JianyingPro").join("User Data").join("Projects").join("draft1").join("clip.mp4"), 60);
+    write_mb(r.user.join("Documents").join("Tencent Files").join("10001").join("FileRecv").join("doc.pdf"), 60);
+    write_mb(r.user.join(".lmstudio").join("models").join("qwen").join("model.gguf"), 60);
+
+    let after = full(&root, &r);
+    assert!(after.hardlinks >= 1, "sub-1MiB pnpm hardlink deduplicated");
+    let expected_added = 64 * 1024 + (7 * 3 + 3 * 60) * 1024 * 1024;
+    assert_eq!(after.total, before.total + expected_added as u64, "exact added bytes with hardlink counted once");
+
+    let drive = DriveInfo { id: "D".into(), name: "测试盘".into(), total: 200.0, free: 100.0, free30: 100.0 };
+    let built = catalog::build(&after, &drive, std::slice::from_ref(&drive), &HashSet::new(), vec![], "12:00".into());
+
+    // No double counting across all blocks (including new profile dot-folders)
+    let sum: f64 = built.model.leaves.iter().map(|l| l.gb).sum();
+    assert!((sum - after.total as f64 / catalog::GB).abs() < 0.001, "sum {sum} vs total {}", after.total as f64 / catalog::GB);
+
+    let leaf = |id: &str| built.model.leaves.iter().find(|l| l.id == id).unwrap_or_else(|| panic!("missing leaf {id}"));
+    for id in ["pnpm", "uv", "nuget", "jetbrains", "shadercache", "jycache"] {
+        assert_eq!(leaf(id).level, "L1", "{id} should be L1");
+    }
+    assert_eq!(leaf("maven").level, "L2");
+    for mv_id in ["m_qq", "m_jianying", "m_lmstudio"] {
+        assert!(built.model.moves.iter().any(|m| m.id == mv_id), "missing migration plan {mv_id}");
+    }
+}

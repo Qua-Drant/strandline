@@ -21,9 +21,10 @@ jobs:
         with:
           workspaces: src-tauri
       - run: npm ci
-      - name: Frontend lint, typecheck and build
+      - name: Frontend lint, tests, typecheck and build
         run: |
           npm run lint
+          npm test
           npm run build
       - name: Backend clippy
         run: npm run lint:backend

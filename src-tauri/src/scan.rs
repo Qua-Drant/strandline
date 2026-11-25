@@ -171,7 +171,14 @@ pub fn scan(root: &Path, roots: &Roots, excluded: &[PathBuf], cancel: &AtomicBoo
         .parallelism(Parallelism::RayonNewPool(threads))
         .process_read_dir(move |_, path, _, children| {
             // runs on worker threads: drop excluded folders, and read file metadata here in parallel
-            let in_sys = { let k = key(path); k == sysroot || k.starts_with(&format!("{sysroot}\\")) };
+            let k_dir = key(path);
+            let has_seg = |seg: &str| k_dir.ends_with(seg) || k_dir.contains(&format!("{seg}\\"));
+            let check_links = k_dir == sysroot
+                || k_dir.starts_with(&format!("{sysroot}\\"))
+                || has_seg("\\pnpm")
+                || has_seg("\\.pnpm")
+                || has_seg("\\uv\\cache")
+                || has_seg("\\.venv");
             children.retain_mut(|c| match c {
                 Ok(e) if e.file_type.is_dir() => {
                     let p = path.join(&e.file_name);
@@ -179,18 +186,21 @@ pub fn scan(root: &Path, roots: &Roots, excluded: &[PathBuf], cancel: &AtomicBoo
                     !excl.iter().any(|x| k == *x || k.starts_with(&format!("{x}\\"))) && !guard::skip_when_scanning(&p, &roots_c)
                 }
                 Ok(e) if e.file_type.is_file() => {
-                    let p = path.join(&e.file_name);
-                    // symlink_metadata opens with "open reparse point": never recalls cloud content
-                    match std::fs::symlink_metadata(&p) {
+                    // On Windows, `e.metadata()` reads the cached WIN32_FIND_DATAW from directory
+                    // enumeration with zero extra syscalls and never recalls cloud placeholders.
+                    let md_res = e.metadata().or_else(|_| std::fs::symlink_metadata(path.join(&e.file_name)));
+                    match md_res {
                         Ok(md) => {
                             #[cfg(windows)]
                             let attrs = { use std::os::windows::fs::MetadataExt; md.file_attributes() };
                             #[cfg(not(windows))]
                             let attrs = 0u32;
                             let mut info = Info { ok: true, size: md.len(), mtime: ms(md.modified()), atime: ms(md.accessed()), attrs, link: None };
-                            if !crate::winfs::is_cloud_attrs(attrs) && (md.len() >= MIN_FILE || in_sys)
-                                && let Some((vol, idx, n)) = crate::winfs::file_id(&p)
+                            if !crate::winfs::is_cloud_attrs(attrs) && (md.len() >= MIN_FILE || check_links) {
+                                let p = path.join(&e.file_name);
+                                if let Some((vol, idx, n)) = crate::winfs::file_id(&p)
                                     && n > 1 { info.link = Some((vol, idx)); }
+                            }
                             e.client_state = info;
                         }
                         Err(_) => { skipped_w.fetch_add(1, Ordering::Relaxed); }

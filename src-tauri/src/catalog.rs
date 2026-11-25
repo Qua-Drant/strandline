@@ -106,19 +106,29 @@ fn specs(r: &Roots, scan: &ScanResult) -> Vec<Spec> {
         spec("condaenv", "dev", "conda 环境", "conda 环境", "L4", "keep", exists_any(&[u.join("miniconda3").join("envs"), u.join("anaconda3").join("envs")]), How::Keep, "正在使用的 Python 环境。"),
         spec("cargo", "dev", "Cargo 下载缓存", "Cargo 缓存", "L1", "recycle", vec![u.join(".cargo").join("registry").join("cache")], How::Recycle, "Rust 依赖的下载缓存，需要时会重新下载。").cmd("cargo cache --autoclean").foam(),
         spec("gradle", "dev", "Gradle 缓存", "Gradle", "L1", "recycle", vec![u.join(".gradle").join("caches")], How::Recycle, "Gradle 依赖缓存，构建时会重新下载。").foam(),
+        spec("pnpm", "dev", "pnpm 全局包存储", "pnpm 缓存", "L1", "recycle", exists_any(&[r.local.join("pnpm").join("store"), r.local.join("pnpm-cache")]), How::Recycle, "pnpm 的全局内容寻址存储；已硬链接到项目的依赖不受影响，需要时会重新拉取。").cmd("pnpm store prune").foam(),
+        spec("uv", "dev", "uv Python 缓存", "uv 缓存", "L1", "recycle", vec![r.local.join("uv").join("cache")], How::Recycle, "uv 下载与构建的 wheel 缓存，需要时会自动重建。").cmd("uv cache clean").foam(),
+        spec("nuget", "dev", "NuGet 包缓存", "NuGet", "L1", "recycle", vec![u.join(".nuget").join("packages")], How::Recycle, ".NET NuGet 依赖包缓存，还原项目时会重新下载。").cmd("dotnet nuget locals all --clear").foam(),
+        spec("maven", "dev", "Maven 本地仓库", "Maven", "L2", "recycle", vec![u.join(".m2").join("repository")], How::Recycle, "Java Maven 本地仓库；若含未发布到远端的本地 snapshot 包请保留。").meta(),
+        spec("jetbrains", "dev", "JetBrains 索引缓存", "IDE 缓存", "L1", "recycle", jetbrains_caches(r), How::Recycle, "IntelliJ / PyCharm / CLion 的本地索引与临时缓存，不含配置与历史记录，打开项目时重建。").foam(),
         // ---- AI models
         spec("ollama", "ai", "Ollama 模型", "Ollama", "L4", "keep", vec![u.join(".ollama").join("models")], How::Keep, "本地模型，用 ollama rm 删除不用的模型，或整体迁移到其他盘。").cmd("ollama list\nollama rm <模型名>").mv("m_ollama"),
+        spec("lmstudio", "ai", "LM Studio 模型", "LM Studio", "L4", "keep", exists_any(&[u.join(".lmstudio").join("models"), u.join(".cache").join("lm-studio").join("models")]), How::Keep, "本地 GGUF 模型权重，适合整体迁移到空间充足的数据盘。").mv("m_lmstudio"),
         spec("hf", "ai", "Hugging Face 模型缓存", "HF 缓存", "L2", "recycle", vec![u.join(".cache").join("huggingface").join("hub")], How::Recycle, "下载过的模型权重，可以从 Hugging Face 重新下载；正在用的模型下次加载会重新下载。").meta(),
-        // ---- WeChat
+        // ---- WeChat & QQ
         spec("wx", "wx", "微信文件", "微信文件", "L4", "keep", exists_any(&[u.join("Documents").join("WeChat Files"), u.join("Documents").join("xwechat_files")]), How::Keep, "聊天记录的原件，删了找不回；适合整体迁移到其他盘。").mv("m_wx"),
+        spec("qq", "wx", "QQ 聊天文件", "QQ 文件", "L4", "keep", vec![u.join("Documents").join("Tencent Files")], How::Keep, "QQ / TIM 聊天记录与接收文件，适合整体迁移到其他盘。").mv("m_qq"),
         // ---- caches (rebuildable)
         spec("pip", "tmp", "pip 缓存", "pip", "L1", "recycle", vec![r.local.join("pip").join("Cache")], How::Recycle, "下载过的安装包缓存，需要时会重新下载。").cmd("pip cache purge").foam(),
         spec("temp", "tmp", "临时文件", "临时", "L1", "recycle", vec![r.temp.clone()], How::RecycleContents, "程序运行时留下的临时文件，正在用的会自动跳过。").foam(),
-        spec("browser", "tmp", "浏览器缓存", "浏览器", "L1", "recycle", browser_caches(r), How::Recycle, "Edge 与 Chrome 的网页缓存，不含密码和书签；浏览器开着时部分文件会被跳过。").foam(),
+        spec("browser", "tmp", "浏览器缓存", "浏览器", "L1", "recycle", browser_caches(r), How::Recycle, "Edge、Chrome 与 Brave 的网页缓存，不含密码和书签；浏览器开着时部分文件会被跳过。").foam(),
         spec("npm", "tmp", "npm 缓存", "npm", "L1", "recycle", vec![r.local.join("npm-cache")], How::Recycle, "下载过的 npm 包，需要时会重新下载。").cmd("npm cache clean --force").foam(),
         spec("yarn", "tmp", "Yarn 缓存", "Yarn", "L1", "recycle", vec![r.local.join("Yarn").join("Cache")], How::Recycle, "Yarn 下载缓存，需要时会重新下载。").foam(),
         spec("crash", "tmp", "程序崩溃转储", "崩溃转储", "L1", "recycle", vec![r.local.join("CrashDumps")], How::Recycle, "程序崩溃时留下的诊断文件，一般用不到。").foam(),
         spec("nvidia", "tmp", "NVIDIA 安装缓存", "NVIDIA", "L1", "recycle", vec![r.program_data.join("NVIDIA Corporation").join("Downloader")], How::Recycle, "驱动安装完成后留下的安装包。").foam(),
+        spec("shadercache", "tmp", "DirectX / GPU 着色器缓存", "着色器", "L1", "recycle", exists_any(&[r.local.join("D3DSCache"), r.local.join("NVIDIA").join("DXCache"), r.local.join("NVIDIA").join("GLCache"), r.local.join("AMD").join("DxCache")]), How::Recycle, "显卡驱动与 DirectX 编译过的着色器缓存，游戏或渲染程序启动时会自动重新编译。").foam(),
+        spec("jycache", "tmp", "剪映预览缓存", "剪映缓存", "L1", "recycle", vec![r.local.join("JianyingPro").join("User Data").join("Cache")], How::Recycle, "剪映生成的代理与渲染预览缓存，不影响草稿工程本身。").foam(),
+        spec("jydrafts", "user", "剪映视频草稿", "剪映草稿", "L4", "keep", vec![r.local.join("JianyingPro").join("User Data").join("Projects")], How::Keep, "正在剪辑的视频草稿工程，删了无法恢复；可整体迁移到其他盘。").mv("m_jianying"),
         // ---- Windows-managed leftovers: shown, but cleaned by Windows' own tools
         spec("winupd", "junk", "Windows 更新残留", "更新残留", "L4", "keep", vec![r.windows.join("SoftwareDistribution").join("Download")], How::Keep, "Windows 更新下载的安装包，由「设置 › 系统 › 存储 › 临时文件」清理。").cmd("cleanmgr /sageset:1"),
         spec("delivery", "junk", "传递优化文件", "传递优化", "L4", "keep", vec![r.windows.join("SoftwareDistribution").join("DeliveryOptimization")], How::Keep, "Windows 更新时的分发缓存，由 Windows 自己清理。").cmd("Delete-DeliveryOptimizationCache -Force"),
@@ -154,7 +164,10 @@ fn specs(r: &Roots, scan: &ScanResult) -> Vec<Spec> {
     v.push(s);
 
     // top-level folders of the profile that nothing above covers (Datasets, Projects, Zotero…)
-    let known: HashSet<&str> = ["appdata", "documents", "downloads", "pictures", "videos", "desktop", "music", ".cache", ".ollama", "miniconda3", "anaconda3", ".cargo", ".gradle", "onedrive"].into_iter().collect();
+    let known: HashSet<&str> = [
+        "appdata", "documents", "downloads", "pictures", "videos", "desktop", "music",
+        ".cache", ".ollama", ".lmstudio", "miniconda3", "anaconda3", ".cargo", ".gradle", ".nuget", ".m2", "onedrive",
+    ].into_iter().collect();
     let mut extra: Vec<(PathBuf, u64)> = std::fs::read_dir(u).into_iter().flatten().flatten()
         .filter(|e| e.file_type().map(|t| t.is_dir()).unwrap_or(false))
         .filter(|e| !known.contains(e.file_name().to_string_lossy().to_lowercase().as_str()))
@@ -190,7 +203,11 @@ fn specs(r: &Roots, scan: &ScanResult) -> Vec<Spec> {
 
 fn browser_caches(r: &Roots) -> Vec<PathBuf> {
     let mut out = Vec::new();
-    for base in [r.local.join("Microsoft").join("Edge").join("User Data"), r.local.join("Google").join("Chrome").join("User Data")] {
+    for base in [
+        r.local.join("Microsoft").join("Edge").join("User Data"),
+        r.local.join("Google").join("Chrome").join("User Data"),
+        r.local.join("BraveSoftware").join("Brave-Browser").join("User Data"),
+    ] {
         let profiles = std::fs::read_dir(&base).into_iter().flatten().flatten()
             .filter(|e| { let n = e.file_name().to_string_lossy().to_string(); n == "Default" || n.starts_with("Profile ") });
         for p in profiles {
@@ -198,6 +215,20 @@ fn browser_caches(r: &Roots) -> Vec<PathBuf> {
                 let d = p.path().join(c);
                 if d.exists() { out.push(d); }
             }
+            let sw = p.path().join("Service Worker").join("CacheStorage");
+            if sw.exists() { out.push(sw); }
+        }
+    }
+    out
+}
+
+fn jetbrains_caches(r: &Roots) -> Vec<PathBuf> {
+    let mut out = Vec::new();
+    let jb = r.local.join("JetBrains");
+    for ide in std::fs::read_dir(&jb).into_iter().flatten().flatten().filter(|e| e.file_type().map(|t| t.is_dir()).unwrap_or(false)) {
+        for sub in ["caches", "index", "tmp"] {
+            let d = ide.path().join(sub);
+            if d.exists() { out.push(d); }
         }
     }
     out
@@ -235,9 +266,12 @@ pub fn best_target(drives: &[DriveInfo], source: &str) -> Option<String> {
 fn move_plan(id: &str, name: &str, cells: Vec<String>, src: &Path, to: String, gb: f64) -> Move {
     let (app, how): (Option<&str>, &str) = match id {
         "m_wx" => (Some("微信"), "复制并校验后，在原处留目录联接，微信照常打开"),
+        "m_qq" => (Some("QQ"), "复制并校验后，在原处留目录联接，QQ 聊天记录照常打开"),
         "m_docker" => (Some("Docker Desktop"), "复制并校验后，在原处留目录联接；也可以用 Docker 自带的 Disk image location"),
         "m_wsl" => (Some("WSL"), "复制并校验后，在原处留目录联接；需要先 wsl --shutdown"),
         "m_ollama" => (Some("Ollama"), "复制并校验后，在原处留目录联接，模型路径不用改"),
+        "m_lmstudio" => (Some("LM Studio"), "复制并校验后，在原处留目录联接，模型目录不用重设"),
+        "m_jianying" => (Some("剪映"), "复制并校验后，在原处留目录联接，草稿工程照常打开"),
         _ => (None, "复制并校验后，在原处留目录联接，原路径照常可用"),
     };
     let mut steps = Vec::new();
