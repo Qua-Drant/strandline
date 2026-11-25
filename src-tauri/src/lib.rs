@@ -54,8 +54,8 @@ pub fn run() {
             commands::list_drives, commands::get_map_model, commands::scan_drive, commands::cancel_scan,
             commands::get_suggestions, actions::clean_items, actions::undo_item, actions::undo_receipt,
             commands::find_large, actions::recycle_files, commands::find_duplicates, actions::recycle_duplicates,
-            actions::start_migration, actions::resume_migration,
-            commands::list_rules, commands::rule_templates, commands::save_rule, actions::dry_run_rule, actions::run_rule,
+            actions::start_migration, actions::resume_migration, actions::cancel_migration, actions::get_migration_status,
+            commands::list_rules, commands::rule_templates, commands::save_rule, commands::delete_rule, actions::dry_run_rule, actions::run_rule,
             commands::list_activity, actions::undo_activity, commands::get_overview, commands::get_history,
             commands::get_settings, commands::save_settings, commands::open_path,
         ])

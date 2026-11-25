@@ -88,7 +88,7 @@ export interface Receipt {
   skipped: { name: string; reason: string }[];
 }
 
-export type MigrationState = 'running' | 'paused' | 'done' | 'error';
+export type MigrationState = 'running' | 'paused' | 'done' | 'error' | 'cancelled';
 export interface MigrationProgress {
   moveId: string;
   /** 0–100 */
@@ -97,6 +97,8 @@ export interface MigrationProgress {
   /** target drive letter */
   drive: string;
   gb: number;
+  /** true only when source bytes were immediately freed (mock demo); false when old folder went to Recycle Bin or stayed as backup */
+  freed?: boolean;
   message?: string;
 }
 export interface MigrateOptions { link: boolean; verify: boolean }

@@ -32,6 +32,8 @@ export class TauriDiskService implements DiskService {
 
   startMigration(moveId: string, to: string, opts: MigrateOptions) { return invoke<void>('start_migration', { moveId, to, opts }); }
   resumeMigration(moveId: string) { return invoke<void>('resume_migration', { moveId }); }
+  cancelMigration(moveId: string) { return invoke<void>('cancel_migration', { moveId }); }
+  getMigrationStatus() { return invoke<MigrationProgress | null>('get_migration_status'); }
   onMigration(cb: (p: MigrationProgress) => void) {
     let un: UnlistenFn | null = null, dead = false;
     void listen<MigrationProgress>('migration-progress', (e) => cb(e.payload)).then((f) => { if (dead) f(); else un = f; });
@@ -41,6 +43,7 @@ export class TauriDiskService implements DiskService {
   listRules() { return invoke<Rule[]>('list_rules'); }
   ruleTemplates() { return invoke<RuleTemplate[]>('rule_templates'); }
   saveRule(rule: Rule) { return invoke<void>('save_rule', { rule }); }
+  deleteRule(id: string) { return invoke<void>('delete_rule', { id }); }
   dryRunRule(id: string) { return invoke<RuleRun>('dry_run_rule', { id }); }
   runRule(id: string) { return invoke<{ run: RuleRun; receiptId: string }>('run_rule', { id }); }
 

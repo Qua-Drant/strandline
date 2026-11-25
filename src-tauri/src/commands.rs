@@ -356,6 +356,20 @@ pub fn save_rule(state: State<AppState>, rule: Rule) -> CmdResult<()> {
 }
 
 #[tauri::command]
+pub fn delete_rule(state: State<AppState>, id: String) -> CmdResult<()> {
+    if matches!(id.as_str(), "r1" | "r2" | "r3") {
+        return Err("内置规则不能删除，如不需要可关闭开关".into());
+    }
+    let mut st = lock(&state.store);
+    let before = st.data.rules.len();
+    st.data.rules.retain(|r| r.id != id);
+    if st.data.rules.len() != before {
+        st.save();
+    }
+    Ok(())
+}
+
+#[tauri::command]
 pub fn list_activity(state: State<AppState>) -> CmdResult<Vec<ActivityEvent>> {
     let st = lock(&state.store);
     // newest 500 entries is plenty for the page; the log itself keeps 90 days
@@ -367,9 +381,55 @@ pub fn get_settings(state: State<AppState>) -> CmdResult<Settings> {
     Ok(lock(&state.store).data.settings.clone())
 }
 
+#[cfg(windows)]
+fn sync_autostart(enable: bool) {
+    // Never touch the user's Run registry key during debug/dev runs or custom data-dir tests.
+    if cfg!(debug_assertions) || std::env::var_os("STRANDLINE_DATA_DIR").is_some() {
+        return;
+    }
+    let Ok(exe) = std::env::current_exe() else { return };
+    let hkcu = winreg::RegKey::predef(winreg::enums::HKEY_CURRENT_USER);
+    if let Ok((run_key, _)) = hkcu.create_subkey("Software\\Microsoft\\Windows\\CurrentVersion\\Run") {
+        if enable {
+            let _ = run_key.set_value("Strandline", &format!("\"{}\"", exe.display()));
+        } else {
+            let _ = run_key.delete_value("Strandline");
+        }
+    }
+}
+#[cfg(not(windows))]
+fn sync_autostart(_: bool) {}
+
+/// Validate and normalize a local Windows path before passing it to Explorer.
+pub fn validate_explorer_target(raw: &str, app_data_dir: &std::path::Path) -> CmdResult<PathBuf> {
+    let expanded = crate::paths::expand_env(raw.trim());
+    if expanded.is_empty() {
+        return Err("路径为空".into());
+    }
+    if expanded.starts_with("\\\\") || expanded.contains("://") {
+        return Err("只允许打开本机磁盘路径".into());
+    }
+    let p = PathBuf::from(&expanded);
+    if !p.is_absolute() || p.components().any(|c| matches!(c, std::path::Component::ParentDir)) {
+        return Err("路径不是有效的本机绝对路径".into());
+    }
+    if crate::paths::is_within(&p, app_data_dir) && !p.exists() {
+        let _ = std::fs::create_dir_all(&p);
+    }
+    if p.exists() {
+        return Ok(p);
+    }
+    if let Some(parent) = p.parent()
+        && parent.exists() {
+            return Ok(parent.to_path_buf());
+        }
+    Err(format!("找不到路径：{expanded}"))
+}
+
 #[tauri::command]
 pub fn save_settings(state: State<AppState>, patch: serde_json::Value) -> CmdResult<Settings> {
     let mut st = lock(&state.store);
+    let prev_auto = st.data.settings.autostart;
     let mut cur = serde_json::to_value(&st.data.settings).map_err(|e| e.to_string())?;
     if let (Some(c), Some(p)) = (cur.as_object_mut(), patch.as_object()) {
         for (k, v) in p {
@@ -380,15 +440,50 @@ pub fn save_settings(state: State<AppState>, patch: serde_json::Value) -> CmdRes
     if !next.scan_root.trim().is_empty() && !sandbox::is_sandbox(std::path::Path::new(next.scan_root.trim())) {
         return Err(format!("{} 不是沙盒文件夹。扫描范围只能留空（整盘）或填 sandbox-gen 生成的沙盒", next.scan_root));
     }
+    let new_auto = next.autostart;
     st.data.settings = next;
     st.save();
+    if new_auto != prev_auto {
+        sync_autostart(new_auto);
+    }
     Ok(st.data.settings.clone())
 }
 
 #[tauri::command]
-pub fn open_path(path: String) -> CmdResult<()> {
-    let expanded = crate::paths::expand_env(&path);
-    std::process::Command::new("explorer.exe").arg(expanded).spawn().map_err(|e| format!("打不开资源管理器：{e}"))?;
+pub fn open_path(state: State<AppState>, path: String) -> CmdResult<()> {
+    let app_dir = lock(&state.store).dir().to_path_buf();
+    let target = validate_explorer_target(&path, &app_dir)?;
+    let mut cmd = std::process::Command::new("explorer.exe");
+    if target.is_file() {
+        cmd.arg(format!("/select,{}", target.display()));
+    } else {
+        cmd.arg(&target);
+    }
+    cmd.spawn().map_err(|e| format!("打不开资源管理器：{e}"))?;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn explorer_target_rejects_unsafe_inputs() {
+        let dir = crate::testutil::tmp();
+        let app_dir = dir.path().join("appdata");
+        let existing_file = dir.path().join("note.txt");
+        std::fs::write(&existing_file, "ok").unwrap();
+
+        assert!(validate_explorer_target("", &app_dir).is_err());
+        assert!(validate_explorer_target("relative\\folder", &app_dir).is_err());
+        assert!(validate_explorer_target("\\\\192.168.1.1\\share\\folder", &app_dir).is_err());
+        assert!(validate_explorer_target("https://example.com", &app_dir).is_err());
+        assert!(validate_explorer_target(&format!("{}\\..\\Windows", dir.path().display()), &app_dir).is_err());
+
+        assert_eq!(validate_explorer_target(&existing_file.to_string_lossy(), &app_dir).unwrap(), existing_file);
+        // App data folder is created on demand if not yet written
+        assert_eq!(validate_explorer_target(&app_dir.to_string_lossy(), &app_dir).unwrap(), app_dir);
+        assert!(app_dir.is_dir());
+    }
 }
 

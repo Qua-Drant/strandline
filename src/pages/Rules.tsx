@@ -27,7 +27,16 @@ export function Rules() {
   const last = {} as Record<string, string>;
   const files = preview?.files ?? cur.files;
   const total = files.reduce((a, f) => a + f[1], 0);
+  const builtin = cur.id === 'r1' || cur.id === 'r2' || cur.id === 'r3';
   const update = async (r: Rule, patch: Partial<Rule>) => { await diskService.saveRule({ ...r, ...patch }); await reload(); };
+  const removeCur = async () => {
+    try {
+      await diskService.deleteRule(cur.id);
+      await reload();
+      setSel('r1');
+      pushToast({ kind: 'ok', title: '已删除规则「' + cur.name + '」' }, 3000);
+    } catch (e) { pushToast({ kind: 'err', title: '无法删除规则', sub: String(e) }, 5000); }
+  };
 
   const runNow = () => {
     const name = cur.name;
@@ -64,13 +73,18 @@ export function Rules() {
                 <span className="mono muted" style={{ fontSize: '0.6875rem' }}>{last[r.id] || r.last}</span>
               </div>
             ))}
-            <p className="muted" style={{ fontSize: '0.6875rem', padding: '0.75rem', margin: 0 }}>规则只看文件名、类型、大小和时间<br />保存在 %APPDATA%\Strandline\rules.json · v12</p>
+            <p className="muted" style={{ fontSize: '0.6875rem', padding: '0.75rem', margin: 0 }}>规则只看文件名、类型、大小和时间<br />保存在 %APPDATA%\Strandline\strandline.json</p>
           </div>
           <i className="sbt" aria-hidden="true" />
         </div>
         <div className="sbw" style={{ ['--sbh' as string]: '72px' }}>
           <section className="rl-detail sbs" aria-labelledby="rl-t">
-            <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem' }}><h2 id="rl-t" style={{ margin: 0, fontSize: '1.125rem', fontWeight: 600 }}>{cur.name}</h2><span className="tok">{isOn(cur) ? '已启用' : '未启用'}</span></div>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem' }}>
+              <h2 id="rl-t" style={{ margin: 0, fontSize: '1.125rem', fontWeight: 600 }}>{cur.name}</h2>
+              <span className="tok">{isOn(cur) ? '已启用' : '未启用'}</span>
+              <span className="grow-1" />
+              {!builtin && <button type="button" className="btn btn-ghost btn-sm" onClick={() => void removeCur()}>删除规则</button>}
+            </div>
             <div className="rl-sec"><span className="rl-k">当</span><div className="toks">{cur.when.map(([k, v]) => <span key={k} className="tok"><b>{k}</b>{v}</span>)}</div></div>
             <div className="rl-sec"><span className="rl-k">就</span><span className="act" style={{ color: 'var(--ink)' }}><span className={'sw10 sw-' + cur.lv} />{cur.do}</span></div>
             <div className="rl-sec"><span className="rl-k">何时</span><div className="fchips">
@@ -78,7 +92,7 @@ export function Rules() {
             </div></div>
             <div style={{ borderTop: '1px solid var(--line)', paddingTop: '1rem' }}>
               <h3 className="sec-t">预览下次运行<span className="grow-1" /><span className="mono">{files.length ? files.length + ' 个文件 · ' + fmt(total) : '暂时没有符合条件的文件'}</span></h3>
-              {files.map(([name, g]) => <div key={name} className="tr" style={{ ['--cols' as string]: 'minmax(0, 1fr) auto', padding: 0 }}><span className="ellipsis">{name}</span><span className="mono muted small">{fmt(g)}</span></div>)}
+              {files.map(([name, g], idx) => <div key={name + ':' + idx} className="tr" style={{ ['--cols' as string]: 'minmax(0, 1fr) auto', padding: 0 }}><span className="ellipsis">{name}</span><span className="mono muted small">{fmt(g)}</span></div>)}
             </div>
             <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem' }}>
               <button type="button" className="btn btn-primary" disabled={!!task} onClick={runNow}>立即运行</button>

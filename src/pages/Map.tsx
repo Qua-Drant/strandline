@@ -160,9 +160,17 @@ export function MapPage() {
   };
   const stopScan = () => { void diskService.cancelScan(); };
 
-  // first load: use the last scan, or scan now if there is none
+  // first load: use the last scan, or scan now if there is none; also sync reminder settings & active migration
   useEffect(() => {
     let live = true;
+    void diskService.getSettings().then((st) => {
+      if (live) set({ rem: { low: st.low, weekly: st.weekly, inst: st.inst } });
+    });
+    void diskService.getMigrationStatus().then((pr) => {
+      if (live && pr && (pr.state === 'running' || pr.state === 'paused')) {
+        set({ moving: pr.moveId, movingTo: pr.drive, mp: pr.pct, paused: pr.state === 'paused' });
+      }
+    });
     void diskService.getMapModel(sys.id).then((m) => {
       if (!live) return;
       set({ model: m, free0: m.drive.free, checked: Object.fromEntries(m.leaves.filter((l) => l.level === 'L1' && !l.cleaned && l.gb > 0.05).map((l) => [l.id, true])) });
@@ -219,14 +227,30 @@ export function MapPage() {
       pushToast({ kind: 'err', title: pr.message ?? '迁移已暂停', sub: '处理好之后点重试，已复制并校验过的部分会保留', action: '重试', run: () => { set({ paused: false }); void diskService.resumeMigration(pr.moveId); } });
     } else if (pr.state === 'done') {
       const cur = sref.current.model, name = cur?.moves.find((m) => m.id === pr.moveId)?.name ?? '';
+      const srcDrive = cur?.drive.id ?? sys.id;
       set((p) => { const ck = { ...(p.checked ?? {}) }; (cur?.moves.find((m) => m.id === pr.moveId)?.cells ?? []).forEach((c) => { delete ck[c]; }); return { moving: null, mp: 0, paused: false, checked: ck }; });
       void reloadModel(); void refreshDrives();
-      pushToast({ kind: 'ok', title: name + '已迁移至 ' + pr.drive + ':', sub: (cur?.drive.id ?? sys.id) + ': 多出 ' + pr.gb.toFixed(1) + ' GB' + (pr.message ? ' · ' + pr.message : ''), action: '打开新位置', run: () => { const m = cur?.moves.find((x) => x.id === pr.moveId); if (m) void diskService.openPath(sref.current.toEdits[m.id] || m.to); } }, 6000);
+      const sub = pr.freed
+        ? srcDrive + ': 多出 ' + pr.gb.toFixed(1) + ' GB' + (pr.message ? ' · ' + pr.message : '')
+        : pr.message?.includes('备份留在')
+          ? pr.message
+          : '旧目录已移入 ' + srcDrive + ': 回收站（' + pr.gb.toFixed(1) + ' GB，清空后释放）' + (pr.message ? ' · ' + pr.message : '');
+      pushToast({ kind: 'ok', title: name + '已迁移至 ' + pr.drive + ':', sub, action: '打开新位置', run: () => { const m = cur?.moves.find((x) => x.id === pr.moveId); if (m) void diskService.openPath(sref.current.toEdits[m.id] || m.to); } }, 7000);
+    } else if (pr.state === 'cancelled') {
+      set({ moving: null, mp: 0, paused: false });
+      pushToast({ kind: 'ok', title: '迁移已取消', sub: pr.message ?? '原文件夹保持原样，已校验的副本保留以便续传' }, 6000);
     } else {
       set({ moving: null, mp: 0, paused: false });
       pushToast({ kind: 'err', title: '迁移没有完成', sub: pr.message ?? '源文件夹保持原样，没有删除任何文件' }, 10000);
     }
   }), []); // eslint-disable-line react-hooks/exhaustive-deps
+  const cancelMove = (moveId: string) => { void diskService.cancelMigration(moveId); };
+  const openLeafPath = (L: Leaf) => {
+    const p = /\s处$/.test(L.pathTail) ? L.pathHead : L.pathHead + L.pathTail;
+    diskService.openPath(p)
+      .then(() => pushToast({ kind: 'ok', title: '已在资源管理器中打开', sub: p }, 3000))
+      .catch((e) => pushToast({ kind: 'err', title: '打不开所在位置', sub: String(e) }, 6000));
+  };
   const startMove = (to: string) => {
     const m = moveOf(sref.current.moveId);
     if (!m) return;
@@ -517,7 +541,7 @@ export function MapPage() {
   useEffect(() => {
     if (isScanning) {
       owned.current = true;
-      setTask({ title: '扫描 C:', note: (s.p < 64 ? '索引文件系统' : '识别应用缓存') + '…', p: s.p, scan: true });
+      setTask({ title: '扫描 ' + sys.id + ':', note: (s.p < 64 ? '索引文件系统' : '识别应用缓存') + '…', p: s.p, scan: true });
     } else if (mvTask) {
       owned.current = true;
       setTask({ title: '迁移 ' + mvTask.name + ' → ' + s.movingTo + ':', note: s.paused ? mvTask.name.split(' ')[0] + ' 正在运行，等待重试' : '可以继续使用电脑，完成后会通知你',
@@ -583,7 +607,7 @@ export function MapPage() {
       add('查看详情', 'Enter', () => openDetail(id));
       if (migratable(id) && s.moving !== L.move) add('迁移…', '', () => openMove(L.move));
       sep();
-      add('打开所在位置', 'Ctrl O', () => { done(); pushToast({ kind: 'ok', title: '已在资源管理器中打开', sub: L.pathHead + L.pathTail }, 3000); });
+      add('打开所在位置', 'Ctrl O', () => { done(); openLeafPath(L); });
       add('复制路径', 'Ctrl Shift C', () => { done(); navigator.clipboard?.writeText(L.pathHead + L.pathTail).catch(() => { /* blocked */ }); pushToast({ kind: 'ok', title: '路径已复制' }, 2500); });
       if (selectable(id)) {
         sep();
@@ -623,7 +647,7 @@ export function MapPage() {
               {([['low', 'C: 少于 20 GB 时提醒我', '通知里直接给出可腾出多少'], ['weekly', '每周日自动清理「可重建」项', '不碰回收站、系统设置和你的文件'], ['inst', '安装包装好后提醒我放进回收站', '只看「下载」文件夹']] as const).map(([k, name, sub]) => (
                 <div key={k} style={{ display: 'flex', alignItems: 'center', gap: '0.75rem', padding: '0.625rem 1rem', borderBottom: '1px solid var(--line)' }}>
                   <span style={{ flex: '1 1 auto', display: 'grid' }}><label htmlFor={'rem-' + k} style={{ color: 'var(--ink)' }}>{name}</label><span className="muted" style={{ fontSize: '0.6875rem' }}>{sub}</span></span>
-                  <span className="tgl"><input id={'rem-' + k} type="checkbox" role="switch" className="tgl-in" checked={!!s.rem[k]} onChange={() => set((p) => ({ rem: { ...p.rem, [k]: !p.rem[k] } }))} /><span className="tgl-tr" aria-hidden="true" /><span className="tgl-kn" aria-hidden="true" /></span>
+                  <span className="tgl"><input id={'rem-' + k} type="checkbox" role="switch" className="tgl-in" checked={!!s.rem[k]} onChange={() => { const next = !s.rem[k]; set((p) => ({ rem: { ...p.rem, [k]: next } })); void diskService.saveSettings({ [k]: next }); }} /><span className="tgl-tr" aria-hidden="true" /><span className="tgl-kn" aria-hidden="true" /></span>
                 </div>
               ))}
               <div className="muted" style={{ padding: '0.625rem 1rem', fontSize: '0.6875rem' }}>通过 Windows 通知中心提醒</div>
@@ -704,7 +728,16 @@ export function MapPage() {
                         {g.kind === 'move' && mvs.map((m) => (
                           <div key={m.id} className={cx('row', m.cells.includes(s.hover ?? '') && 'is-hover')} onMouseEnter={() => set({ hover: m.cells[0] })} onMouseLeave={unhover} onContextMenu={ctxHandler(m.cells[0])}>
                             <span className="nm">{m.name}</span><span className="mono">{moveGb(m).toFixed(1)}</span>
-                            <button type="button" className="btn btn-sm" disabled={!!s.moving} onClick={() => openMove(m.id)}>{s.moving === m.id ? (s.paused ? '已暂停' : Math.round(s.mp) + '%') : '迁移…'}</button>
+                            {s.moving === m.id ? (
+                              <span style={{ display: 'inline-flex', gap: '0.25rem', alignItems: 'center' }}>
+                                {s.paused
+                                  ? <button type="button" className="btn btn-sm" onClick={() => { set({ paused: false }); void diskService.resumeMigration(m.id); }}>重试</button>
+                                  : <span className="mono muted" style={{ fontSize: '0.75rem' }}>{Math.round(s.mp)}%</span>}
+                                <button type="button" className="btn btn-ghost btn-sm" onClick={() => cancelMove(m.id)}>取消</button>
+                              </span>
+                            ) : (
+                              <button type="button" className="btn btn-sm" disabled={!!s.moving} onClick={() => openMove(m.id)}>迁移…</button>
+                            )}
                           </div>
                         ))}
                         {g.kind === 'keep' && g.ids!.map((id) => (
@@ -909,7 +942,7 @@ export function MapPage() {
               <div style={{ display: 'flex', gap: '0.5rem', flexWrap: 'wrap' }}>
                 {dt.canSelect && <button type="button" className="btn btn-primary btn-sm" onClick={() => toggle(dt.L.id)}>{dt.selLabel}</button>}
                 {dt.canMove && <button type="button" className="btn btn-sm" onClick={() => openMove(dt.L.move)}>迁移…</button>}
-                <button type="button" className="btn btn-ghost btn-sm" onClick={() => pushToast({ kind: 'ok', title: '已在资源管理器中打开', sub: dt.L.pathHead + dt.L.pathTail }, 3000)}><Icon name="i21" size={13} />打开所在位置</button>
+                <button type="button" className="btn btn-ghost btn-sm" onClick={() => openLeafPath(dt.L)}><Icon name="i21" size={13} />打开所在位置</button>
               </div>
               {dt.L.cmd && (
                 <details><summary className="muted" style={{ cursor: 'pointer', fontSize: '0.75rem' }}>高级 · PowerShell 等效命令</summary>

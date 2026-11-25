@@ -79,7 +79,10 @@ pub async fn clean_items(app: AppHandle, drive: String, ids: Vec<String>) -> Cmd
         let state = a.state::<AppState>();
         writable(&state)?;
         if !current(&state, &drive) { return Err("请先重新扫描".into()); }
-        let roots = roots_for(&state, &drive)?;
+        let (check_running, roots) = {
+            let check = lock(&state.store).data.settings.check_running;
+            (check, roots_for(&state, &drive)?)
+        };
         let app_dir = app_data(&state);
         let plans = lock(&state.scan).as_ref().map(|s| s.built.plans.clone()).unwrap_or_default();
         let mut rc = Receipt::default();
@@ -88,6 +91,33 @@ pub async fn clean_items(app: AppHandle, drive: String, ids: Vec<String>) -> Cmd
         for id in ids {
             let Some(plan) = plans.get(&id) else { continue };
             let o = match &plan.how {
+                How::Recycle if id == "browser" && check_running => {
+                    let edge_on = migrate::running(&["msedge.exe".into()]);
+                    let chrome_on = migrate::running(&["chrome.exe".into()]);
+                    let mut allowed = Vec::new();
+                    let mut skipped = Vec::new();
+                    let mut noted_edge = false;
+                    let mut noted_chrome = false;
+                    for p in &plan.paths {
+                        let s = p.to_string_lossy().to_lowercase();
+                        if edge_on && s.contains("\\microsoft\\edge\\") {
+                            if !noted_edge {
+                                skipped.push(Skipped { name: "Edge 浏览器缓存".into(), reason: "Microsoft Edge 正在运行，已跳过（关闭浏览器后再清理，或在设置中关闭运行检查）".into() });
+                                noted_edge = true;
+                            }
+                        } else if chrome_on && s.contains("\\google\\chrome\\") {
+                            if !noted_chrome {
+                                skipped.push(Skipped { name: "Chrome 浏览器缓存".into(), reason: "Google Chrome 正在运行，已跳过（关闭浏览器后再清理，或在设置中关闭运行检查）".into() });
+                                noted_chrome = true;
+                            }
+                        } else {
+                            allowed.push(p.clone());
+                        }
+                    }
+                    let mut r = recycle::recycle(&allowed, &roots, &app_dir);
+                    r.skipped.extend(skipped);
+                    r
+                }
                 How::Recycle => recycle::recycle(&plan.paths, &roots, &app_dir),
                 How::RecycleContents => plan.paths.first().map(|d| recycle::recycle_contents(d, &roots, &app_dir)).unwrap_or(recycle::Outcome { recycled: vec![], skipped: vec![] }),
                 How::EmptyBin => {
@@ -277,12 +307,16 @@ pub async fn recycle_duplicates(app: AppHandle, sel: Vec<DupSelection>) -> CmdRe
 pub struct Migration {
     pub move_id: String,
     pub ctl: Arc<Control>,
+    pub last: MigrationProgress,
 }
 
 fn apps_for(move_id: &str) -> (Vec<String>, String) {
     let (names, label): (&[&str], &str) = match move_id {
         "m_ollama" => (&["ollama.exe", "ollama app.exe"], "Ollama"),
+        "m_lmstudio" => (&["lm studio.exe"], "LM Studio"),
         "m_wx" => (&["wechat.exe", "weixin.exe"], "微信"),
+        "m_qq" => (&["qq.exe", "tim.exe"], "QQ"),
+        "m_jianying" => (&["jianyingpro.exe", "veditor.exe"], "剪映"),
         "m_docker" => (&["docker desktop.exe", "com.docker.backend.exe"], "Docker Desktop"),
         "m_wsl" => (&["wsl.exe", "wslhost.exe"], "WSL"),
         _ => (&[], ""),
@@ -308,21 +342,29 @@ pub fn start_migration(app: AppHandle, state: State<AppState>, move_id: String, 
     let job = Job { src: src.clone(), dst: dst.clone(), link: opts.link, verify: opts.verify, apps, app_label: label };
     let app_dir = app_data(&state);
     // refuse obviously bad jobs right away, before showing progress
-    migrate::preflight(&job, &roots, &app_dir, &Probes { free_bytes: &migrate::free_bytes, running: &|_| false })?;
+    let total_bytes = migrate::preflight(&job, &roots, &app_dir, &Probes { free_bytes: &migrate::free_bytes, running: &|_| false })?;
+    let total_gb = gb(total_bytes);
     let ctl = Arc::new(Control::default());
-    *lock(&state.migration) = Some(Migration { move_id: move_id.clone(), ctl: ctl.clone() });
+    let init_prog = MigrationProgress { move_id: move_id.clone(), pct: 0.0, state: "running", drive: dst_drive.clone(), gb: total_gb, freed: Some(false), message: None };
+    *lock(&state.migration) = Some(Migration { move_id: move_id.clone(), ctl: ctl.clone(), last: init_prog });
     let _ = drive;
     std::thread::spawn(move || {
         let state = app.state::<AppState>();
         let send = |pct: f64, st: &'static str, gbv: f64, msg: Option<String>| {
-            let _ = app.emit("migration-progress", MigrationProgress { move_id: move_id.clone(), pct, state: st, drive: dst_drive.clone(), gb: gbv, message: msg });
+            let p = MigrationProgress { move_id: move_id.clone(), pct, state: st, drive: dst_drive.clone(), gb: gbv, freed: Some(false), message: msg };
+            if let Some(m) = lock(&state.migration).as_mut()
+                && m.move_id == move_id {
+                    m.last = p.clone();
+                }
+            let _ = app.emit("migration-progress", p);
         };
         let probes = Probes { free_bytes: &migrate::free_bytes, running: &migrate::running };
         let res = migrate::run(&job, &roots, &app_dir, &ctl, &probes, |e| match e {
-            Event::Progress(p) => send(p, "running", 0.0, None),
-            Event::Paused(p, m) => send(p, "paused", 0.0, Some(m)),
+            Event::Progress(p) => send(p, "running", total_gb, None),
+            Event::Paused(p, m) => send(p, "paused", total_gb, Some(m)),
             Event::Done(_) => {}
         });
+        let cancelled = ctl.cancel.load(Ordering::Relaxed);
         *lock(&state.migration) = None;
         match res {
             Ok(fin) => {
@@ -345,7 +387,10 @@ pub fn start_migration(app: AppHandle, state: State<AppState>, move_id: String, 
                 st.data.undo.insert(id, UndoRecord { receipt: rc, at: now_ms(), ..rec });
                 st.save();
                 drop(st);
-                let _ = app.emit("migration-progress", MigrationProgress { move_id: move_id.clone(), pct: 100.0, state: "done", drive: dst_drive.clone(), gb: g, message: Some(note) });
+                let _ = app.emit("migration-progress", MigrationProgress { move_id: move_id.clone(), pct: 100.0, state: "done", drive: dst_drive.clone(), gb: g, freed: Some(false), message: Some(note) });
+            }
+            Err(e) if cancelled || e.starts_with("已停止") => {
+                let _ = app.emit("migration-progress", MigrationProgress { move_id: move_id.clone(), pct: 0.0, state: "cancelled", drive: dst_drive.clone(), gb: 0.0, freed: Some(false), message: Some(e) });
             }
             Err(e) => send(0.0, "error", 0.0, Some(e)),
         }
@@ -361,10 +406,34 @@ pub fn resume_migration(state: State<AppState>, move_id: String) -> CmdResult<()
     Ok(())
 }
 
+#[tauri::command]
+pub fn cancel_migration(state: State<AppState>, move_id: String) -> CmdResult<()> {
+    let g = lock(&state.migration);
+    let m = g.as_ref().filter(|m| m.move_id == move_id).ok_or("没有正在进行的迁移")?;
+    m.ctl.cancel.store(true, Ordering::Relaxed);
+    m.ctl.paused.store(false, Ordering::Relaxed);
+    Ok(())
+}
+
+#[tauri::command]
+pub fn get_migration_status(state: State<AppState>) -> Option<MigrationProgress> {
+    lock(&state.migration).as_ref().map(|m| m.last.clone())
+}
+
 // ---------------- rules
 
 fn rule_roots(state: &AppState) -> CmdResult<Roots> {
     roots_for(state, &crate::drives::system_drive())
+}
+
+fn rule_item_label(p: &Path, all: &[&Path]) -> String {
+    let name = p.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_default();
+    let clash = all.iter().filter(|q| q.file_name() == p.file_name()).count() > 1;
+    if clash {
+        format!("{name} · {}", crate::paths::display(p.parent().unwrap_or(p)))
+    } else {
+        name
+    }
 }
 
 #[tauri::command]
@@ -373,7 +442,8 @@ pub fn dry_run_rule(state: State<AppState>, id: String) -> CmdResult<RuleRun> {
     let roots = rule_roots(&state)?;
     let Ok(spec) = rules::parse(&rule, &roots) else { return Ok(RuleRun::default()) };
     let m = rules::matches(&spec);
-    Ok(RuleRun { n: m.len(), gb: gb(m.iter().map(|x| x.1).sum()), files: m.iter().take(50).map(|(p, b)| (p.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_default(), gb(*b))).collect() })
+    let refs: Vec<&Path> = m.iter().map(|(p, _)| p.as_path()).collect();
+    Ok(RuleRun { n: m.len(), gb: gb(m.iter().map(|x| x.1).sum()), files: m.iter().take(50).map(|(p, b)| (rule_item_label(p, &refs), gb(*b))).collect() })
 }
 
 fn execute_rule(state: &AppState, id: &str) -> CmdResult<(RuleRun, String)> {
@@ -386,18 +456,24 @@ fn execute_rule(state: &AppState, id: &str) -> CmdResult<(RuleRun, String)> {
     let mut rc = Receipt::default();
     let mut rec = UndoRecord::default();
     let mut done: Vec<(String, f64)> = Vec::new();
+    let all_src: Vec<&Path> = o.recycled.iter().map(|(p, _)| p.as_path()).chain(o.moved.iter().map(|(f, _, _)| f.as_path())).collect();
+    let mut seq = 0usize;
     for (p, b) in &o.recycled {
-        let name = p.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_default();
+        let item_id = format!("ri_{seq}");
+        seq += 1;
+        let label = rule_item_label(p, &all_src);
         rc.bin += gb(*b);
-        rc.items.push(ReceiptItem { id: name.clone(), name: name.clone(), act: "recycle".into(), level: rule.lv.clone(), gb: gb(*b), undoable: true });
-        rec.recycled.insert(name.clone(), vec![p.to_string_lossy().to_string()]);
-        done.push((name, gb(*b)));
+        rc.items.push(ReceiptItem { id: item_id.clone(), name: label.clone(), act: "recycle".into(), level: rule.lv.clone(), gb: gb(*b), undoable: true });
+        rec.recycled.insert(item_id, vec![p.to_string_lossy().to_string()]);
+        done.push((label, gb(*b)));
     }
     for (f, t, b) in &o.moved {
-        let name = f.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_default();
-        rc.items.push(ReceiptItem { id: name.clone(), name: name.clone(), act: "keep".into(), level: rule.lv.clone(), gb: gb(*b), undoable: true });
-        rec.moved.insert(name.clone(), vec![(f.to_string_lossy().to_string(), t.to_string_lossy().to_string())]);
-        done.push((name, gb(*b)));
+        let item_id = format!("mv_{seq}");
+        seq += 1;
+        let label = rule_item_label(f, &all_src);
+        rc.items.push(ReceiptItem { id: item_id.clone(), name: label.clone(), act: "keep".into(), level: rule.lv.clone(), gb: gb(*b), undoable: true });
+        rec.moved.insert(item_id, vec![(f.to_string_lossy().to_string(), t.to_string_lossy().to_string())]);
+        done.push((label, gb(*b)));
     }
     rc.skipped = o.skipped;
     let total: f64 = done.iter().map(|d| d.1).sum();
@@ -450,5 +526,45 @@ pub fn start_scheduler(app: AppHandle) {
         }
         std::thread::sleep(std::time::Duration::from_secs(9 * 60));
     });
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::{sandbox, store::Store};
+
+    #[test]
+    fn same_named_files_across_folders_undo_cleanly() {
+        let dir = crate::testutil::tmp();
+        let root = dir.path().join("sb");
+        sandbox::generate(&root).unwrap();
+        let r = Roots::for_sandbox(&root);
+        let app_dir = dir.path().join("appdata");
+
+        // Place two identically-named screenshots in Desktop and Pictures
+        let d_shot = r.user.join("Desktop").join("截图_同名测试.png");
+        let p_shot = r.user.join("Pictures").join("截图_同名测试.png");
+        std::fs::write(&d_shot, vec![1u8; 4096]).unwrap();
+        std::fs::write(&p_shot, vec![2u8; 8192]).unwrap();
+
+        let mut store = Store::open(app_dir);
+        store.data.settings.read_only = false;
+        store.data.settings.scan_root = root.to_string_lossy().to_string();
+        store.save();
+        let state = AppState::new(store);
+
+        let (run, receipt_id) = execute_rule(&state, "r2").unwrap();
+        assert!(run.n >= 4, "both existing and both identically-named screenshots matched: {}", run.n);
+        assert!(!d_shot.exists() && !p_shot.exists(), "both identically-named files moved");
+        // Labels for colliding file names are disambiguated
+        let clash_labels: Vec<_> = run.files.iter().filter(|(n, _)| n.starts_with("截图_同名测试.png · ")).collect();
+        assert_eq!(clash_labels.len(), 2, "expected disambiguated labels, got {:?}", run.files);
+
+        // Undo restores BOTH identically-named files (no BTreeMap key overwrite)
+        undo_whole(&state, &receipt_id).unwrap();
+        assert!(d_shot.exists() && p_shot.exists(), "both identically-named files restored");
+        assert_eq!(std::fs::metadata(&d_shot).unwrap().len(), 4096);
+        assert_eq!(std::fs::metadata(&p_shot).unwrap().len(), 8192);
+    }
 }
 

@@ -205,7 +205,7 @@ function SafetyNotice() {
 /** Window frame: title bar, sidebar, page area. Pages render their header + content as children. */
 /** `palette` replaces the default page palette (the space map has its own, with commands). */
 export function Shell({ path, children, commands, palette }: { path: string; children: ReactNode; commands?: PaletteCommand[]; palette?: ReactNode }) {
-  const { cFree, sys, theme, pal, setPal, runEscape, setAppEl } = useShell();
+  const { cFree, sys, theme, pal, setPal, runEscape, setAppEl, closeMode } = useShell();
   const atmo = atmoOf(cFree, sys.total);
 
   useEffect(() => {
@@ -235,7 +235,7 @@ export function Shell({ path, children, commands, palette }: { path: string; chi
         <span style={{ flex: '1 1 auto' }} data-tauri-drag-region />
         <button type="button" className="cap" aria-label="最小化" onClick={win.minimize}><Icon name="winMin" size={10} /></button>
         <button type="button" className="cap" aria-label="最大化" onClick={win.toggleMaximize}><Icon name="winMax" size={10} /></button>
-        <button type="button" className="cap cap-close" aria-label="关闭" onClick={win.close}><Icon name="winClose" size={10} /></button>
+        <button type="button" className="cap cap-close" aria-label="关闭" onClick={() => (closeMode === 'tray' ? win.minimize() : win.close())}><Icon name="winClose" size={10} /></button>
       </header>
       <div style={{ display: 'flex', flex: '1 1 auto', minBlockSize: 0, flexWrap: 'wrap' }}>
         <Sidebar path={path} />

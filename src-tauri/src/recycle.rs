@@ -75,6 +75,8 @@ pub fn bin_limits(p: &Path) -> (u64, bool) {
 /// Move paths to the Recycle Bin, each one guarded and capacity-checked. Never deletes permanently.
 pub fn recycle(paths: &[PathBuf], target: &Roots, app_data: &Path) -> Outcome {
     let mut out = Outcome { recycled: Vec::new(), skipped: Vec::new() };
+    let initial_bin = if target.sandbox { 0 } else { crate::catalog::recycle_bin_bytes(&target.drive).unwrap_or(0) };
+    let mut batch_bytes = 0u64;
     for p in paths {
         if !p.exists() && std::fs::symlink_metadata(p).is_err() {
             continue;
@@ -93,8 +95,23 @@ pub fn recycle(paths: &[PathBuf], target: &Roots, app_data: &Path) -> Outcome {
             out.skipped.push(Skipped { name: name_of(p), reason: format!("有 {:.1} GB，超过回收站上限 {:.1} GB，Windows 会直接永久删除，所以没有处理", size as f64 / 1073741824.0, max as f64 / 1073741824.0) });
             continue;
         }
+        if !target.sandbox && initial_bin.saturating_add(batch_bytes).saturating_add(size) > max {
+            out.skipped.push(Skipped {
+                name: name_of(p),
+                reason: format!(
+                    "有 {:.1} GB，加上回收站现有的 {:.1} GB 会超过上限 {:.1} GB（Windows 会自动挤掉回收站里更早的文件），请先检查回收站",
+                    size as f64 / 1073741824.0,
+                    (initial_bin + batch_bytes) as f64 / 1073741824.0,
+                    max as f64 / 1073741824.0
+                ),
+            });
+            continue;
+        }
         match trash::delete(p) {
-            Ok(()) if !p.exists() => out.recycled.push((p.clone(), size)),
+            Ok(()) if !p.exists() => {
+                batch_bytes = batch_bytes.saturating_add(size);
+                out.recycled.push((p.clone(), size));
+            }
             Ok(()) => out.skipped.push(Skipped { name: name_of(p), reason: "有文件正在使用，没有移入回收站".into() }),
             Err(e) => out.skipped.push(Skipped { name: name_of(p), reason: friendly(&e.to_string()) }),
         }

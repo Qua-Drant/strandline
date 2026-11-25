@@ -116,10 +116,10 @@ export class MockDiskService implements DiskService {
       if (L.act === 'empty') { amt = this.bin; rc.freed += amt; this.bin = 0; }
       else if (L.act === 'recycle') {
         amt = L.gb; rc.bin += amt; this.bin += amt;
-        revert[id] = () => { this.bin = Math.max(0, this.bin - amt); Object.assign(L, clone(o)); };
+        revert[id] = () => { this.bin = Math.max(0, this.bin - amt); delete L.cleaned; Object.assign(L, clone(o)); };
       } else {
         amt = L.actual; rc.freed += amt; this.free[drive] += amt;
-        if (L.act === 'setting') revert[id] = () => { this.free[drive] -= amt; Object.assign(L, clone(o)); };
+        if (L.act === 'setting') revert[id] = () => { this.free[drive] -= amt; delete L.cleaned; Object.assign(L, clone(o)); };
       }
       if (L.act !== 'empty') {
         L.gb = Math.max(0, o.gb - o.gain);
@@ -197,7 +197,7 @@ export class MockDiskService implements DiskService {
         this.free.C += gb;
         if (this.free[m.drive] !== undefined) this.free[m.drive] -= gb;
         this.log({ kind: 'move', title: '迁移 ' + plan.name + ' → ' + m.drive + ':', detail: plan.link ? '原处留了联接' : plan.how, amount: gb.toFixed(1) + ' GB', undo: '', items: [] });
-        this.emit({ moveId: m.id, pct: 100, state: 'done', drive: m.drive, gb });
+        this.emit({ moveId: m.id, pct: 100, state: 'done', drive: m.drive, gb, freed: true });
       } else { m.pct = next; this.emit({ moveId: m.id, pct: next, state: 'running', drive: m.drive, gb }); }
     }, 120);
   }
@@ -213,6 +213,19 @@ export class MockDiskService implements DiskService {
     this.mig.paused = false; this.mig.retried = true;
     this.tick();
   }
+  async cancelMigration(moveId: string) {
+    if (!this.mig || this.mig.id !== moveId) return;
+    if (this.mig.timer) clearInterval(this.mig.timer);
+    const drive = this.mig.drive;
+    this.mig = null;
+    this.emit({ moveId, pct: 0, state: 'cancelled', drive, gb: 0, message: '已停止迁移，原文件夹保持原样' });
+  }
+  async getMigrationStatus(): Promise<MigrationProgress | null> {
+    if (!this.mig) return null;
+    const plan = MOVES.find((x) => x.id === this.mig!.id);
+    const gb = plan ? plan.cells.reduce((a, c) => a + this.leaf(c).gb, 0) : 0;
+    return { moveId: this.mig.id, pct: this.mig.pct, state: this.mig.paused ? 'paused' : 'running', drive: this.mig.drive, gb };
+  }
   onMigration(cb: (p: MigrationProgress) => void) { this.migListeners.add(cb); return () => { this.migListeners.delete(cb); }; }
 
   // ---------- rules
@@ -221,6 +234,9 @@ export class MockDiskService implements DiskService {
   async saveRule(rule: Rule) {
     const i = this.rules.findIndex((r) => r.id === rule.id);
     if (i >= 0) this.rules[i] = clone(rule); else this.rules.push(clone(rule));
+  }
+  async deleteRule(id: string) {
+    this.rules = this.rules.filter((r) => r.id !== id);
   }
   async dryRunRule(id: string): Promise<RuleRun> {
     const r = this.rules.find((x) => x.id === id);

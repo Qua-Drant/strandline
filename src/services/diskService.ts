@@ -37,12 +37,15 @@ export interface DiskService {
   // migration
   startMigration(moveId: string, to: string, opts: MigrateOptions): Promise<void>;
   resumeMigration(moveId: string): Promise<void>;
+  cancelMigration(moveId: string): Promise<void>;
+  getMigrationStatus(): Promise<MigrationProgress | null>;
   onMigration(cb: (p: MigrationProgress) => void): () => void;
 
   // rules
   listRules(): Promise<Rule[]>;
   ruleTemplates(): Promise<RuleTemplate[]>;
   saveRule(rule: Rule): Promise<void>;
+  deleteRule(id: string): Promise<void>;
   dryRunRule(id: string): Promise<RuleRun>;
   runRule(id: string): Promise<{ run: RuleRun; receiptId: string }>;
 

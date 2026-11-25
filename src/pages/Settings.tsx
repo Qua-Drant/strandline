@@ -38,8 +38,10 @@ function Kv({ title, desc, htmlFor, children, top, mono }: { title: string; desc
 }
 
 export function Settings() {
-  const { theme, setTheme, pushToast, refreshDrives } = useShell();
+  const { theme, setTheme, pushToast, refreshDrives, drives: knownDrives } = useShell();
   const [sec, setSec] = useState('set-general');
+  const [editRoot, setEditRoot] = useState<string | null>(null);
+  const [newExcl, setNewExcl] = useState<string | null>(null);
   const [st, reload] = useData(() => diskService.getSettings());
   if (!st) return <PageHeader crumb={['设置']} />;
   const put = async (patch: Partial<SettingsData>) => {
@@ -48,10 +50,28 @@ export function Settings() {
   };
   const sw: Record<SwKey, boolean> = { ...SWD, ...Object.fromEntries(Object.keys(SWD).map((k) => [k, st[k as SwKey]])), sound: sound.enabled() } as Record<SwKey, boolean>;
   const { close, bin, drives, excl } = st;
+  const driveIds = knownDrives.length ? knownDrives.map((d) => d.id) : ['C', 'D', 'E'];
   const setClose = (v: SettingsData['close']) => void put({ close: v });
   const setBin = (v: SettingsData['bin']) => void put({ bin: v });
   const setDrives = (v: Record<string, boolean>) => void put({ drives: v });
   const setExcl = (v: string[]) => void put({ excl: v });
+  const commitExcl = () => {
+    const v = (newExcl ?? '').trim();
+    setNewExcl(null);
+    if (v && !excl.includes(v)) setExcl(excl.concat([v]));
+  };
+  const commitRoot = () => {
+    if (editRoot === null) return;
+    const v = editRoot.trim();
+    setEditRoot(null);
+    void put({ scanRoot: v });
+  };
+  const openAppData = async () => {
+    try {
+      await diskService.openPath('%APPDATA%\\Strandline');
+      pushToast({ kind: 'ok', title: '已在资源管理器中打开', sub: '%APPDATA%\\Strandline' }, 3000);
+    } catch (e) { pushToast({ kind: 'err', title: '打不开文件夹', sub: String(e) }, 6000); }
+  };
 
   const tg = (k: SwKey) => () => {
     const v = !sw[k];
@@ -77,15 +97,22 @@ export function Settings() {
           </section>
           <section id="set-scan" aria-labelledby="h-scan"><h2 id="h-scan">扫描</h2>
             <Kv title="扫描哪些磁盘" desc="只读取文件夹结构和大小">
-              <div className="fchips">{['C', 'D', 'E'].map((d) => <button key={d} type="button" className="fchip" aria-pressed={!!drives[d]} onClick={() => setDrives({ ...drives, [d]: !drives[d] })}>{d}:</button>)}</div>
+              <div className="fchips">{driveIds.map((d) => { const on = drives[d] ?? true; return <button key={d} type="button" className="fchip" aria-pressed={on} onClick={() => setDrives({ ...drives, [d]: !on })}>{d}:</button>; })}</div>
             </Kv>
             <Kv top title="扫描范围" desc={<>
-              留空表示扫描整个磁盘。开发与测试时填沙盒目录（例如 D:\01_Research\Strandline\sandbox），所有清理、迁移都只会发生在这里面
-              {st.scanRoot && <div className="mono small" style={{ color: 'var(--ink)', marginTop: '0.375rem', overflowWrap: 'anywhere' }}>{st.scanRoot}</div>}
+              留空表示扫描整个磁盘。开发与测试时填沙盒目录（例如 D:\01_Research\Strandline\sandbox\demo），所有清理、迁移都只会发生在这里面
+              {editRoot !== null ? (
+                <div style={{ display: 'flex', gap: '0.375rem', alignItems: 'center', marginTop: '0.5rem' }}>
+                  <input className="inline-in" autoFocus placeholder="输入沙盒文件夹完整路径，留空表示整盘" value={editRoot} onChange={(e) => setEditRoot(e.target.value)}
+                    onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); commitRoot(); } if (e.key === 'Escape') setEditRoot(null); }} />
+                  <button type="button" className="btn btn-primary btn-sm" onClick={commitRoot}>确定</button>
+                  <button type="button" className="btn btn-ghost btn-sm" onClick={() => setEditRoot(null)}>取消</button>
+                </div>
+              ) : st.scanRoot && <div className="mono small" style={{ color: 'var(--ink)', marginTop: '0.375rem', overflowWrap: 'anywhere' }}>{st.scanRoot}</div>}
             </>}>
               <span style={{ display: 'inline-flex', gap: '0.375rem' }}>
-                {st.scanRoot && <button type="button" className="btn btn-ghost btn-sm" onClick={() => void put({ scanRoot: '' })}>改为整盘</button>}
-                <button type="button" className="btn btn-sm" onClick={() => { const p = window.prompt('扫描这个文件夹（完整路径）', st.scanRoot); if (p !== null) void put({ scanRoot: p.trim() }); }}>设置…</button>
+                {st.scanRoot && editRoot === null && <button type="button" className="btn btn-ghost btn-sm" onClick={() => void put({ scanRoot: '' })}>改为整盘</button>}
+                {editRoot === null && <button type="button" className="btn btn-sm" onClick={() => setEditRoot(st.scanRoot)}>设置…</button>}
               </span>
             </Kv>
             <Kv title="每天快速扫描一次" desc="13:00 左右，电脑空闲时进行，大约 1 分钟" htmlFor="st-daily">{T('daily')}</Kv>
@@ -98,9 +125,17 @@ export function Settings() {
                     <button type="button" className="btn btn-ghost btn-sm" onClick={() => setExcl(excl.filter((_, j) => j !== i))}>移除</button>
                   </div>
                 ))}
+                {newExcl !== null && (
+                  <div style={{ display: 'flex', gap: '0.375rem', alignItems: 'center', marginTop: '0.25rem' }}>
+                    <input className="inline-in" autoFocus placeholder="例如 D:\Projects 或 %USERPROFILE%\Work" value={newExcl} onChange={(e) => setNewExcl(e.target.value)}
+                      onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); commitExcl(); } if (e.key === 'Escape') setNewExcl(null); }} />
+                    <button type="button" className="btn btn-primary btn-sm" onClick={commitExcl}>添加</button>
+                    <button type="button" className="btn btn-ghost btn-sm" onClick={() => setNewExcl(null)}>取消</button>
+                  </div>
+                )}
               </div>
             </>}>
-              <button type="button" className="btn btn-sm" onClick={() => setExcl(excl.concat(['%USERPROFILE%\\Projects\\thesis-' + (excl.length + 1)]))}>添加文件夹…</button>
+              {newExcl === null && <button type="button" className="btn btn-sm" onClick={() => setNewExcl('')}>添加文件夹…</button>}
             </Kv>
           </section>
           <section id="set-safety" aria-labelledby="h-safety"><h2 id="h-safety">清理与安全</h2>
@@ -122,12 +157,12 @@ export function Settings() {
             <Kv title="本地元数据识别 · 不读取文件内容" desc="判断一个文件夹能不能清理，只用文件名、类型、大小和时间"><span className="lock">始终如此</span></Kv>
             <Kv title="重复文件的哈希只在这台电脑上计算" desc="不上传任何文件、文件名或路径"><span className="lock">始终如此</span></Kv>
             <Kv title="规则和活动记录的位置" desc="%APPDATA%\Strandline" mono>
-              <button type="button" className="btn btn-sm" onClick={() => pushToast({ kind: 'ok', title: '已在资源管理器中打开', sub: '%APPDATA%\\Strandline' }, 3000)}>打开文件夹</button>
+              <button type="button" className="btn btn-sm" onClick={() => void openAppData()}>打开文件夹</button>
             </Kv>
           </section>
           <section id="set-about" aria-labelledby="h-about"><h2 id="h-about">关于</h2>
-            <Kv title="Strandline 0.10" desc="潮线家族 · 磁盘整理与空间地图">
-              <button type="button" className="btn btn-sm" onClick={() => pushToast({ kind: 'ok', title: '已是最新版本', sub: 'Strandline 0.10' }, 3000)}>检查更新</button>
+            <Kv title="Strandline 0.1.0" desc="拾滩 · 安全优先的 Windows 磁盘整理与空间地图">
+              <button type="button" className="btn btn-sm" onClick={() => pushToast({ kind: 'ok', title: '当前版本 v0.1.0', sub: '本地离线运行，无后台联网检查' }, 3000)}>版本信息</button>
             </Kv>
           </section>
         </div>

@@ -18,6 +18,8 @@ export interface ShellState {
   readOnly: boolean;
   /** the first-run safety notice has been answered */
   ackSafety: boolean;
+  /** what clicking the window close button does ('tray' minimizes, 'quit' closes) */
+  closeMode: 'tray' | 'quit';
   /** free GB on the system drive — shared so a clean on any page shows in the sidebar and overview */
   cFree: number;
   /** re-read drive sizes (and the safety settings) from the service after an action */

@@ -136,6 +136,8 @@ pub struct MigrationProgress {
     pub drive: String,
     pub gb: f64,
     #[serde(skip_serializing_if = "Option::is_none")]
+    pub freed: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub message: Option<String>,
 }
 
