@@ -1478,3 +1478,9 @@ a.btn { text-decoration: none; }
   --f-brand: 'Palatino Linotype', 'Book Antiqua', Palatino, 'Iowan Old Style', Georgia, serif;
   --f-kai: 'LXGW WenKai', '霞鹜文楷', 'LXGW WenKai TC', 'KaiTi', 'STKaiti', serif;
 }
+
+/* browser demo: replaces the window buttons in the title bar */
+.demo-tag { display: inline-flex; align-items: center; gap: 0.5rem; margin-inline-end: 0.75rem; padding: 0.1875rem 0.625rem; border: 1px solid var(--line-2); border-radius: 999px; background: var(--surface); color: var(--ink-2); font-size: 0.75rem; white-space: nowrap; }
+.demo-tag i { inline-size: 0.4375rem; block-size: 0.4375rem; border-radius: 50%; background: var(--tide); flex: 0 0 auto; }
+.demo-tag a { color: var(--ink); text-underline-offset: 2px; }
+.demo-tag a:hover { color: var(--tide); }

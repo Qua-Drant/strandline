@@ -233,9 +233,17 @@ export function Shell({ path, children, commands, palette }: { path: string; chi
         <Icon name="logo" size={18} />
         <span className="brand" data-tauri-drag-region><span className="brand-n">Strandline</span><span className="brand-t">拾滩</span></span>
         <span style={{ flex: '1 1 auto' }} data-tauri-drag-region />
-        <button type="button" className="cap" aria-label="最小化" onClick={win.minimize}><Icon name="winMin" size={10} /></button>
-        <button type="button" className="cap" aria-label="最大化" onClick={win.toggleMaximize}><Icon name="winMax" size={10} /></button>
-        <button type="button" className="cap cap-close" aria-label="关闭" onClick={() => (closeMode === 'tray' ? win.minimize() : win.close())}><Icon name="winClose" size={10} /></button>
+        {win.desktop ? <>
+          <button type="button" className="cap" aria-label="最小化" onClick={win.minimize}><Icon name="winMin" size={10} /></button>
+          <button type="button" className="cap" aria-label="最大化" onClick={win.toggleMaximize}><Icon name="winMax" size={10} /></button>
+          <button type="button" className="cap cap-close" aria-label="关闭" onClick={() => (closeMode === 'tray' ? win.minimize() : win.close())}><Icon name="winClose" size={10} /></button>
+        </> : (
+          // browser demo: the window buttons would do nothing, so say what this is instead
+          <span className="demo-tag" role="note" title="浏览器演示模式：所有数据都是模拟的，清理、迁移、撤销都可以随便点，不会读写你电脑上的任何文件">
+            <i aria-hidden="true" />Web 演示 · 模拟数据，不会改动你的文件
+            <a href="https://github.com/Qua-Drant/strandline/releases" target="_blank" rel="noreferrer">下载桌面版</a>
+          </span>
+        )}
       </header>
       <div style={{ display: 'flex', flex: '1 1 auto', minBlockSize: 0, flexWrap: 'wrap' }}>
         <Sidebar path={path} />
