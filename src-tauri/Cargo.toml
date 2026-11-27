@@ -2,9 +2,9 @@
 name = "strandline"
 version = "0.1.0"
 description = "Strandline · 拾滩 — a safety-first disk organizer for Windows"
-authors = ["Strandline contributors"]
+authors = ["Qua-Drant"]
 license = "MIT"
-repository = ""
+repository = "https://github.com/Qua-Drant/strandline"
 edition = "2024"
 rust-version = "1.90"
 default-run = "strandline"

@@ -31,5 +31,5 @@ Thumbs.db
 *.suo
 *.sw?
 
-# Local Claude settings (personal)
-.claude/settings.local.json
+# Local AI-assistant configs (personal)
+.claude/

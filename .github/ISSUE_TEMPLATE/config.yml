@@ -1,5 +1,5 @@
 blank_issues_enabled: false
 contact_links:
   - name: Data-safety or security problem (private)
-    url: https://github.com/OWNER/strandline/security/advisories/new
+    url: https://github.com/Qua-Drant/strandline/security/advisories/new
     about: Anything that could delete or damage files, or bypass the protected-path guard. See SECURITY.md.

@@ -33,5 +33,13 @@
     "vite": "^8.3.6"
   },
   "description": "Strandline · 拾滩 — a safety-first disk organizer for Windows (Tauri v2 + React)",
-  "license": "MIT"
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Qua-Drant/strandline.git"
+  },
+  "homepage": "https://qua-drant.github.io/strandline/",
+  "bugs": {
+    "url": "https://github.com/Qua-Drant/strandline/issues"
+  }
 }

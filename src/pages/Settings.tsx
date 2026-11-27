@@ -100,7 +100,7 @@ export function Settings() {
               <div className="fchips">{driveIds.map((d) => { const on = drives[d] ?? true; return <button key={d} type="button" className="fchip" aria-pressed={on} onClick={() => setDrives({ ...drives, [d]: !on })}>{d}:</button>; })}</div>
             </Kv>
             <Kv top title="扫描范围" desc={<>
-              留空表示扫描整个磁盘。开发与测试时填沙盒目录（例如 D:\01_Research\Strandline\sandbox\demo），所有清理、迁移都只会发生在这里面
+              留空表示扫描整个磁盘。开发与测试时填 npm run sandbox 生成的沙盒目录（项目里 sandbox\demo 的完整路径），所有清理、迁移都只会发生在这里面
               {editRoot !== null ? (
                 <div style={{ display: 'flex', gap: '0.375rem', alignItems: 'center', marginTop: '0.5rem' }}>
                   <input className="inline-in" autoFocus placeholder="输入沙盒文件夹完整路径，留空表示整盘" value={editRoot} onChange={(e) => setEditRoot(e.target.value)}
