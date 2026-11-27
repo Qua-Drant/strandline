@@ -9,6 +9,7 @@
 
 <p align="center">
   <a href="https://qua-drant.github.io/strandline/"><img alt="Live demo" src="https://img.shields.io/badge/live%20demo-mock%20data-2f7f86"></a>
+  <a href="https://github.com/Qua-Drant/strandline/actions/workflows/ci.yml"><img alt="CI" src="https://github.com/Qua-Drant/strandline/actions/workflows/ci.yml/badge.svg"></a>
   <a href="https://github.com/Qua-Drant/strandline/releases"><img alt="Download" src="https://img.shields.io/badge/download-Windows%2010%2F11-0b6bcb"></a>
   <img alt="Tauri v2" src="https://img.shields.io/badge/Tauri-v2-24c8db">
   <img alt="Rust" src="https://img.shields.io/badge/Rust-backend-b7410e">
