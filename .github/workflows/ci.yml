@@ -4,6 +4,8 @@ on:
   push:
     branches: [main]
   pull_request:
+  # a fresh run (instead of "re-run failed jobs", which uploads a second github-pages artifact and makes deploy-pages refuse)
+  workflow_dispatch:
 
 jobs:
   check:
@@ -44,7 +46,7 @@ jobs:
 
   pages:
     # the browser demo (mock data) on GitHub Pages
-    if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+    if: github.ref == 'refs/heads/main' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch')
     needs: check
     runs-on: ubuntu-latest
     permissions:
