@@ -106,11 +106,11 @@ Then set *Settings › 扫描 › 扫描范围* to the full path of `sandbox\dem
 | | |
 | --- | --- |
 | Desktop | Tauri v2 + Rust (parallel read-only scan, BLAKE3, `trash`, Win32 file attributes and junctions) |
-| Frontend | React 19 + Vite + TypeScript, one interface shared by the desktop app and the web demo |
+| Frontend | React 19 + Vite + TypeScript, one interface shared by the desktop app and the web demo; fonts are bundled (~110 KB), nothing is loaded from other hosts |
 | Dual mode | A `DiskService` interface: `MockDiskService` in the browser, `TauriDiskService` calling Rust commands on desktop |
 | Installer | 2–3 MB (NSIS 2.1 MB / MSI 3.1 MB), uses the system WebView2 |
 | Scan speed | 300k files / 3,100 folders in a sandbox: 5.4–7.4 s across runs, ~37 MB peak working set; the map sent to the UI is ~17 KB (release build, `tests/perf.rs`) |
-| Tests | 26 Rust tests (21 unit + 1 full sandbox flow + 4 Windows edge cases) + 1 benchmark; 2 frontend tests; clippy warnings fail the build |
+| Tests | 26 Rust tests (21 unit + 1 full sandbox flow + 4 Windows edge cases) + 1 benchmark; 2 frontend tests + a smoke test of the production build (light/dark × 2 pages); clippy warnings fail the build |
 
 Covered by tests: sandbox generation; scanning and cancel; junction loops, hard links, cloud placeholders, unreadable folders; classification without double counting; large files; duplicates (same size, different content is not a duplicate); Recycle Bin recycle and restore; emptying the bin refused in a sandbox; migration verify + junction, resume after interruption, pause while the app runs, undo; rule dry run / run / undo; protected paths. **Every test runs inside `sandbox/.tests` — nothing is ever written to a real system drive.**
 
@@ -122,6 +122,7 @@ Requirements: Node 22+, Rust (stable-msvc), Visual Studio C++ build tools, WebVi
 npm run lint           # frontend (oxlint)
 npm test               # frontend tests
 npm run build          # type check + web demo build (dist\)
+npm run smoke          # headless Chrome/Edge check of the production build: theme colours, local fonts, no external requests, no errors, narrow layout
 npm run lint:backend   # cargo clippy, warnings are errors
 npm run test:backend   # Rust unit + integration tests, sandbox only
 cargo test --release --manifest-path src-tauri/Cargo.toml --test perf -- --ignored --nocapture   # 300k-file benchmark

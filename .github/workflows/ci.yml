@@ -26,6 +26,17 @@ jobs:
           npm run lint
           npm test
           npm run build
+      - name: Smoke test of the production build (headless Chrome)
+        run: npm run smoke
+        env:
+          SMOKE_OUT: smoke
+      - name: Upload smoke screenshots
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: smoke-screenshots
+          path: smoke
+          if-no-files-found: ignore
       - name: Backend clippy
         run: npm run lint:backend
       - name: Backend tests (sandbox only)

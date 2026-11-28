@@ -496,7 +496,7 @@ export function MapPage() {
   // ---- 30-day tide meter: smooth area curve, 87G reference, scrubbable cursor
   const used = TOTAL - freeNow, used30 = TOTAL - FREE30;
   const tvals = HIST30.concat([freeNow]), tN = tvals.length - 1, vmax = Math.max(92, freeNow + 6), vmin = 30;
-  const tpy = (v: number) => 44 - (v - vmin) / (vmax - vmin) * 40 - 2, tpx = (i: number) => i / tN * 300;
+  const tpy = (v: number) => 44 - (v - vmin) / (vmax - vmin) * 40 - 2, tpx = (i: number) => (tN > 0 ? i / tN * 300 : 300); // no history yet (first run / loading): one point at "today"
   const tpts = tvals.map((v, i) => [tpx(i), tpy(v)]);
   let tline = 'M' + tpts[0][0].toFixed(1) + ' ' + tpts[0][1].toFixed(2);
   for (let i = 0; i < tpts.length - 1; i++) {
@@ -685,8 +685,8 @@ export function MapPage() {
               </svg>
               <span className="tm-ref" style={{ top: (tpy(FREE30) / 44 * 100).toFixed(2) + '%' }} aria-hidden="true"><span className="mono">30 天前 {Math.round(tvals[0])}G</span></span>
               {tc !== null && <>
-                <span className="tm-cur" style={{ left: (tc / tN * 100).toFixed(2) + '%' }} aria-hidden="true" />
-                <span className="tm-dot" style={{ left: (tc / tN * 100).toFixed(2) + '%', top: (tpy(tvals[tc]) / 44 * 100).toFixed(2) + '%' }} aria-hidden="true" />
+                <span className="tm-cur" style={{ left: (tpx(tc) / 3).toFixed(2) + '%' }} aria-hidden="true" />
+                <span className="tm-dot" style={{ left: (tpx(tc) / 3).toFixed(2) + '%', top: (tpy(tvals[tc]) / 44 * 100).toFixed(2) + '%' }} aria-hidden="true" />
               </>}
             </div>
             <div className="tm-cap" aria-hidden="true"><span className={cx('tm-t', tc === null && 'on')}>30天前 {Math.round(tvals[0])}G → 今日 {Math.round(freeNow)}G</span><span className={cx('tm-t mono', tc !== null && 'on')}>{tc === null ? '' : tdesc(tc)}</span></div>

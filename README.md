@@ -106,11 +106,11 @@ npm run desktop    # 需要 Rust（stable-msvc）+ VS C++ 生成工具
 | | |
 | --- | --- |
 | 桌面端 | Tauri v2 + Rust（并行只读扫描、BLAKE3、`trash`、Win32 文件属性与目录联接） |
-| 前端 | React 19 + Vite + TypeScript，桌面端与 Web 演示共用同一套界面 |
+| 前端 | React 19 + Vite + TypeScript，桌面端与 Web 演示共用同一套界面；字体全部本地打包（约 110 KB），不访问任何外部网络 |
 | 双模式 | `DiskService` 接口：浏览器里用 `MockDiskService`，桌面端用 `TauriDiskService` 调 Rust 命令 |
 | 安装包 | 2–3 MB（NSIS 2.1 MB / MSI 3.1 MB），使用系统自带的 WebView2 |
 | 扫描性能 | 30 万文件 / 3100 个文件夹的沙盒：扫描 5.4–7.4 秒（多次实测），峰值工作集约 37 MB；传给界面的地图数据约 17 KB（release 构建，`tests/perf.rs`） |
-| 测试 | Rust 26 个（21 单元 + 1 沙盒全流程 + 4 Windows 边界）+ 1 个性能基准；前端 2 个；clippy 警告即失败 |
+| 测试 | Rust 26 个（21 单元 + 1 沙盒全流程 + 4 Windows 边界）+ 1 个性能基准；前端 2 个 + 生产构建冒烟检查（浅色/深色 × 2 页）；clippy 警告即失败 |
 
 测试覆盖：沙盒生成；扫描与取消；目录联接环路、硬链接、云端占位文件、无权限文件夹；分类不重复计数；大文件；重复文件（同大小不同内容不会误判）；回收站移入与恢复；沙盒中拒绝清空回收站；迁移校验 + 目录联接、中断续传、程序运行时暂停、撤销；规则预演/执行/撤销；保护路径拦截。**所有测试只在 `sandbox/.tests` 里运行，从不在真实系统盘上做写操作。**
 
@@ -122,6 +122,7 @@ npm run desktop    # 需要 Rust（stable-msvc）+ VS C++ 生成工具
 npm run lint           # 前端 oxlint
 npm test               # 前端测试
 npm run build          # 类型检查 + 打包 Web 演示（dist\）
+npm run smoke          # 用无头 Chrome/Edge 检查生产构建：主题颜色、本地字体、无外部请求、无报错、窄窗口布局
 npm run lint:backend   # cargo clippy，警告即失败
 npm run test:backend   # Rust 单元 + 集成测试（只在沙盒里）
 cargo test --release --manifest-path src-tauri/Cargo.toml --test perf -- --ignored --nocapture   # 30 万文件压测
