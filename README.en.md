@@ -92,6 +92,12 @@ npm run dev        # http://localhost:5173, runs in the browser with mock data
 
 **3. Scan your real drive with the desktop app** — download the installer from [Releases](https://github.com/Qua-Drant/strandline/releases) (Windows 10/11, no admin rights needed). It starts read-only, so scanning C: is safe.
 
+> The installer is not code-signed yet, so Windows may warn about an unknown publisher. Compare its hash with `SHA256SUMS.txt` from the release before running it:
+>
+> ```powershell
+> Get-FileHash .\Strandline_v0.1.1_x64-setup.exe -Algorithm SHA256
+> ```
+
 Want to try cleaning and migration without touching real files? Use the sandbox:
 
 ```powershell

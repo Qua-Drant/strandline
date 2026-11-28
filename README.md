@@ -92,6 +92,12 @@ npm run dev        # http://localhost:5173，浏览器里跑，同样是模拟�
 
 **③ 用桌面版扫描真实磁盘**：从 [Releases](https://github.com/Qua-Drant/strandline/releases) 下载安装包（Windows 10/11，无需管理员权限）。首次启动是只读模式，可以放心扫描 C 盘。
 
+> 安装包暂未做代码签名，Windows 可能提示「未知发布者」。可以先核对 Release 里 `SHA256SUMS.txt` 的校验值再运行：
+>
+> ```powershell
+> Get-FileHash .\Strandline_v0.1.1_x64-setup.exe -Algorithm SHA256
+> ```
+
 想试清理和迁移又不想碰真实文件？用沙盒：
 
 ```powershell

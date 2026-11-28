@@ -1,6 +1,6 @@
 [package]
 name = "strandline"
-version = "0.1.0"
+version = "0.1.1"
 description = "Strandline · 拾滩 — a safety-first disk organizer for Windows"
 authors = ["Qua-Drant"]
 license = "MIT"

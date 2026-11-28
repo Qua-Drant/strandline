@@ -161,8 +161,8 @@ export function Settings() {
             </Kv>
           </section>
           <section id="set-about" aria-labelledby="h-about"><h2 id="h-about">关于</h2>
-            <Kv title="Strandline 0.1.0" desc="拾滩 · 安全优先的 Windows 磁盘整理与空间地图">
-              <button type="button" className="btn btn-sm" onClick={() => pushToast({ kind: 'ok', title: '当前版本 v0.1.0', sub: '本地离线运行，无后台联网检查' }, 3000)}>版本信息</button>
+            <Kv title={'Strandline ' + __APP_VERSION__} desc="拾滩 · 安全优先的 Windows 磁盘整理与空间地图">
+              <button type="button" className="btn btn-sm" onClick={() => pushToast({ kind: 'ok', title: '当前版本 v' + __APP_VERSION__, sub: '本地离线运行，无后台联网检查' }, 3000)}>版本信息</button>
             </Kv>
           </section>
         </div>
